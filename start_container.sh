@@ -1,31 +1,37 @@
 #!/bin/bash
 
-if ! docker start wireguard 2>/dev/null; then
+CONTAINER_NAME=wireguard
+
+if ! docker start $CONTAINER_NAME 2>/dev/null; then
     if [ -f "./config/endpoint" ]; then
         echo "Detected client mode (endpoint found)"
         docker run \
             --cap-add=NET_ADMIN \
             --sysctl="net.ipv4.conf.all.src_valid_mark=1" \
-            --name=wireguard \
+            --name=$CONTAINER_NAME \
             -d \
-            --network=host \
             -e ALLOWEDIPS="$(cat ./config/allowed_ips)" \
             -v ./keys:/config/server \
             -v ./config:/config/wg_confs \
-            wireguard \
+            $CONTAINER_NAME \
             -c "/config/wireguard-entrypoint.sh"
     else
         echo "Detected server mode (endpoint not found)"
         docker run \
             --cap-add=NET_ADMIN \
-            --name=wireguard \
+            --name=$CONTAINER_NAME \
             -d \
             -p 51821:51821/udp \
             -e PEERS=0 \
             -e ALLOWEDIPS="$(cat ./config/allowed_ips)" \
             -v ./keys:/config/server \
             -v ./config:/config/wg_confs \
-            wireguard \
+            $CONTAINER_NAME \
             -c "/config/wireguard-entrypoint.sh"
     fi
 fi
+
+CONTAINER_IP=$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' $CONTAINER_NAME)
+
+sudo iptables -t nat -A POSTROUTING -s $CONTAINER_IP -j MASQUERADE
+sudo iptables -t nat -A PREROUTING -j DNAT --to-destination $CONTAINER_NAME
