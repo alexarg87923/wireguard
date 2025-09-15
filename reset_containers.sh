@@ -8,10 +8,10 @@ if [ -f "./config/*.conf" ]; then
     rm ./config/*.conf
 fi
 
-if [ -f "./keys/*-server" ]; then
-    rm ./keys/*-server
+if [ -f "./config/*-server" ]; then
+    rm ./config/*-server
 fi
 
-if [ -f "./keys/*-client" ]; then
-    rm ./keys/*-client
+if [ -f "./config/*-client" ]; then
+    rm ./config/*-client
 fi
