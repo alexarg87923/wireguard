@@ -5,6 +5,7 @@ if ! docker start wireguard 2>/dev/null; then
         echo "Detected client mode (endpoint found)"
         docker run \
             --cap-add=NET_ADMIN \
+            --cap-add=SYS_MODULE \
             --name=wireguard \
             -d \
             -e ALLOWEDIPS="$(cat ./config/allowed_ips)" \
