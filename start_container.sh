@@ -34,4 +34,4 @@ fi
 CONTAINER_IP=$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' $CONTAINER_NAME)
 
 sudo iptables -t nat -A POSTROUTING -s $CONTAINER_IP -j MASQUERADE
-sudo iptables -t nat -A PREROUTING -j DNAT --to-destination $CONTAINER_NAME
+sudo iptables -t nat -A PREROUTING -j DNAT --to-destination $CONTAINER_IP
