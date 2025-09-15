@@ -4,14 +4,14 @@ docker container prune
 docker volume prune
 docker images | awk '{print $3}' | grep -v IMAGE | xargs docker image rm
 
-if [ -f "./config/*.conf" ]; then
+if ls ./config/*.conf 1> /dev/null 2>&1; then
     rm ./config/*.conf
 fi
 
-if [ -f "./config/*-server" ]; then
-    rm ./config/*-server
+if ls ./keys/*-server 1> /dev/null 2>&1; then
+    rm ./keys/*-server
 fi
 
-if [ -f "./config/*-client" ]; then
-    rm ./config/*-client
+if ls ./keys/*-client 1> /dev/null 2>&1; then
+    rm ./keys/*-client
 fi

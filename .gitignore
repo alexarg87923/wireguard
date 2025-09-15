@@ -1,3 +1,4 @@
 *.psk
 *.conf
 keys/*
+config/*

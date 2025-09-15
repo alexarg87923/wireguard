@@ -1,8 +1,8 @@
 #!/bin/bash
 
 PEER_PSK="/config/wg_confs/peer1.psk"
-CONFIG_DIR="./config/wg_confs"
-KEY_DIR="./keys"
+CONFIG_DIR="/config/wg_confs"
+KEY_DIR="/config/server"
 
 if [ ! -f "$KEY_DIR/privatekey-client" ]; then
     echo "No client keypair found, generating..."
