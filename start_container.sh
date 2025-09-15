@@ -8,6 +8,7 @@ if ! docker start wireguard 2>/dev/null; then
             --sysctl="net.ipv4.conf.all.src_valid_mark=1" \
             --name=wireguard \
             -d \
+            --network=host \
             -e ALLOWEDIPS="$(cat ./config/allowed_ips)" \
             -v ./keys:/config/server \
             -v ./config:/config/wg_confs \
