@@ -2,7 +2,6 @@
 
 CONTAINER_NAME=wireguard
 ENDPOINT_FILE=./config/endpoint
-CONTAINER_IP=$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' $CONTAINER_NAME)
 
 if ! docker start $CONTAINER_NAME 2>/dev/null; then
     if [ -f "./config/endpoint" ]; then
@@ -34,6 +33,7 @@ if ! docker start $CONTAINER_NAME 2>/dev/null; then
 fi
 
 if [ -f "$ENDPOINT_FILE" ]; then
+  CONTAINER_IP=$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' $CONTAINER_NAME)
   sudo iptables -t nat -A POSTROUTING -s $CONTAINER_IP -j MASQUERADE
   sudo iptables -t nat -A PREROUTING -j DNAT --to-destination $CONTAINER_IP
 fi
