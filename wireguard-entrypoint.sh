@@ -21,9 +21,9 @@ if [ "$MODE" = "CLIENT" ]; then
 [Interface]
 Address = $(cat ${CONFIG_DIR}/client_ip)
 PrivateKey = $(cat ${KEY_DIR}/privatekey-client)
-$( [ -f "${CONFIG_DIR}/dns" ] && echo "DNS = $(cat ${CONFIG_DIR}/dns)" )
 PostUp = iptables -t nat -A POSTROUTING -o %i -j MASQUERADE
 PostDown = iptables -t nat -D POSTROUTING -o %i -j MASQUERADE
+$( [ -f "${CONFIG_DIR}/dns" ] && echo "DNS = $(cat ${CONFIG_DIR}/dns)" )
 
 [Peer]
 PublicKey = $(cat ${CONFIG_DIR}/peer1.pub)
