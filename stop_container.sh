@@ -7,8 +7,8 @@ ENDPOINT_FILE=./config/endpoint
 if [ -f "$ENDPOINT_FILE" ]; then
   if [ -n "$CONTAINER_IP" ]; then
       echo "Removing NAT rules for $CONTAINER_IP"
-      sudo iptables -t nat -D POSTROUTING -s $CONTAINER_IP -j MASQUERADE 2>/dev/null
-      sudo iptables -t nat -D PREROUTING -j DNAT --to-destination $CONTAINER_IP 2>/dev/null
+      sudo iptables -t mangle -D OUTPUT -s $CONTAINER_IP -j MARK --set-mark 100
+      sudo iptables -t nat -D OUTPUT -m mark ! --mark 100 -j DNAT --to-destination $CONTAINER_IP
   fi
 fi
 

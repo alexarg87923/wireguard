@@ -34,6 +34,6 @@ fi
 
 if [ -f "$ENDPOINT_FILE" ]; then
   CONTAINER_IP=$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' $CONTAINER_NAME)
-  sudo iptables -t nat -A POSTROUTING -s $CONTAINER_IP -j MASQUERADE
-  sudo iptables -t nat -A PREROUTING -j DNAT --to-destination $CONTAINER_IP
+  sudo iptables -t mangle -A OUTPUT -s $CONTAINER_IP -j MARK --set-mark 100
+  sudo iptables -t nat -A OUTPUT -m mark ! --mark 100 -j DNAT --to-destination $CONTAINER_IP
 fi
