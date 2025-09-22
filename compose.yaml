@@ -1,0 +1,49 @@
+vpn:
+  wireguard-server:
+    profiles: ["server"]
+    build:
+      context: ./wireguard
+      dockerfile: Dockerfile
+    container_name: wireguard-server
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - "51821:51821/udp"
+    environment:
+      - ALLOWEDIPS=${ALLOWEDIPS}
+      - PEERS=${PEERS}
+      - PUID=1000
+      - PGID=1000
+      - INTERNAL_SUBNET=10.0.2.1
+      - LOG_CONFS=true
+    volumes:
+      - ./keys:/config/server
+      - ./config:/config/wg_confs
+    entrypoint: ["/bin/bash"]
+    command: ["/config/wireguard-entrypoint.sh"]
+  wireguard-client:
+    profiles: ["client"]
+    build:
+      context: ./wireguard
+      dockerfile: Dockerfile
+    container_name: wireguard-client
+    cap_add:
+      - NET_ADMIN
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - INTERNAL_SUBNET=10.0.2.1
+      - LOG_CONFS=true
+    sysctls:
+      - net.ipv4.conf.all.src_valid_mark=1
+    volumes:
+      - ./keys:/config/server
+      - ./config:/config/wg_confs
+    entrypoint: ["/bin/bash"]
+    command: ["/config/wireguard-entrypoint.sh"]
+  proxy:
+    profiles: ["server", "client"]
+    build:
+      context: ./proxy
+      dockerfile: Dockerfile
+    network_mode: "service:wireguard-${PROFILE}"
