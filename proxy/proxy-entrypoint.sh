@@ -2,8 +2,6 @@
 
 echo "Starting transparent proxy..."
 
-echo 1 > /proc/sys/net/ipv4/ip_forward
-
 echo "Starting redsocks..."
 redsocks -c /etc/redsocks/redsocks.conf &
 
