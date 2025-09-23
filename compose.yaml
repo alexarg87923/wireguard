@@ -17,8 +17,8 @@ services:
       - INTERNAL_SUBNET=10.0.2.1
       - LOG_CONFS=true
     volumes:
-      - ./keys:/config/server
-      - ./config:/config/wg_confs
+      - ./wireguard/keys:/config/server
+      - ./wireguard/config:/config/wg_confs
     entrypoint: ["/bin/bash"]
     command: ["/config/wireguard-entrypoint.sh"]
   wireguard-client:
@@ -37,8 +37,8 @@ services:
     sysctls:
       - net.ipv4.conf.all.src_valid_mark=1
     volumes:
-      - ./keys:/config/server
-      - ./config:/config/wg_confs
+      - ./wireguard/keys:/config/server
+      - ./wireguard/config:/config/wg_confs
     entrypoint: ["/bin/bash"]
     command: ["/config/wireguard-entrypoint.sh"]
   proxy:
