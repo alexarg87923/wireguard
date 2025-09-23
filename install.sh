@@ -45,7 +45,7 @@ if [ ! -f $ENV_FILE ]; then # check if we don't have a .env file, if we don't th
 fi
 
 if ! docker start "wireguard-$PROFILE" 2>/dev/null; then # if we failed
-  docker-compose --profile ${PROFILE} up
+  docker compose --profile ${PROFILE} up -d
 fi
 EOF
 
@@ -53,7 +53,7 @@ EOF
 cat > stop_container.sh << 'EOF'
 #!/bin/bash
 
-docker-compose down --remove-orphans
+docker compose down --remove-orphans
 EOF
 
 # create reset_container.sh
