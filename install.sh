@@ -32,6 +32,7 @@ if [ ! -f $ENV_FILE ]; then # check if we don't have a .env file, if we don't th
   echo "Generating .env file..."
   
   echo "PROFILE=$PROFILE" > .env
+  echo "COMPOSE_PROFILES=$PROFILE" >> .env
   
   # add allowedips since it is profile agnostic
   if [ -f ./wireguard/config/allowed_ips ]; then
