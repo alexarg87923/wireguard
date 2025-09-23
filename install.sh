@@ -1,5 +1,11 @@
 #!/bin/bash
 
+echo "Removing commands if they exist"
+
+rm ./start_container.sh
+rm ./stop_container.sh
+rm ./reset_container.sh
+
 echo "Installing WireGuard container management scripts..."
 
 # set umask so all created files/dirs are owner-only
