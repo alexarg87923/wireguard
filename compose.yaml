@@ -42,8 +42,8 @@ vpn:
     entrypoint: ["/bin/bash"]
     command: ["/config/wireguard-entrypoint.sh"]
   proxy:
-    profiles: ["server", "client"]
+    profiles: ["client"]
     build:
       context: ./proxy
       dockerfile: Dockerfile
-    network_mode: "service:wireguard-${PROFILE}"
+    network_mode: "service:wireguard-client"

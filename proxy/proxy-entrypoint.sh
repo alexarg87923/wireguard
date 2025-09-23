@@ -2,8 +2,14 @@
 
 echo "Starting transparent proxy..."
 
-# Start redsocks in background
+echo 1 > /proc/sys/net/ipv4/ip_forward
+
+echo "Starting redsocks..."
 redsocks -c /etc/redsocks/redsocks.conf &
 
-# Keep container running
+sleep 2
+
+echo "Transparent proxy ready on port 3128"
+echo "Container will route traffic through VPN via shared network"
+
 wait
