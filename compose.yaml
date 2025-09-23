@@ -9,6 +9,7 @@ services:
       - NET_ADMIN
     ports:
       - "51821:51821/udp"
+      - "3128:3128"
     environment:
       - ALLOWEDIPS=${ALLOWEDIPS}
       - PEERS=${PEERS}
@@ -27,6 +28,8 @@ services:
       context: ./wireguard
       dockerfile: Dockerfile
     container_name: wireguard-client
+    ports:
+      - "3128:3128"
     cap_add:
       - NET_ADMIN
     environment:
