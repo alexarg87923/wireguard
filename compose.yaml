@@ -46,8 +46,6 @@ services:
     build:
       context: ./proxy
       dockerfile: Dockerfile
-    ports:
-      - 3128
     network_mode: "service:wireguard-client"
     entrypoint: ["/bin/bash"]
     command: ["/proxy-entrypoint.sh"]
