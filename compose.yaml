@@ -1,4 +1,4 @@
-vpn:
+services:
   wireguard-server:
     profiles: ["server"]
     build:
