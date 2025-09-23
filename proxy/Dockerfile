@@ -14,8 +14,6 @@ COPY proxy-entrypoint.sh /proxy-entrypoint.sh
 
 RUN chmod +x /proxy-entrypoint.sh
 
-EXPOSE 3128
-
 ENTRYPOINT ["/bin/bash"]
 
 CMD ["/proxy-entrypoint.sh"]
