@@ -44,11 +44,3 @@ services:
       - ./wireguard/config:/config/wg_confs
     entrypoint: ["/bin/bash"]
     command: ["/config/wireguard-entrypoint.sh"]
-  proxy:
-    profiles: ["client"]
-    build:
-      context: ./proxy
-      dockerfile: Dockerfile
-    network_mode: "service:wireguard-client"
-    entrypoint: ["/bin/bash"]
-    command: ["/proxy-entrypoint.sh"]
