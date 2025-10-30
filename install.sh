@@ -58,9 +58,33 @@ if [ "$PROFILE" = "client" ] && [ -z "$HOST_PUBLIC_IP" ]; then
 fi
 
 # Always use docker compose to ensure containers are managed by compose
+echo "Starting container..."
 docker compose --profile ${PROFILE} up -d
 
+# Wait for container to be running (especially important for host routing setup)
+CONTAINER_NAME="wireguard-${PROFILE}"
+echo "Waiting for container to be ready..."
+max_attempts=30
+attempt=0
+while [ $attempt -lt $max_attempts ]; do
+  if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+    # Check if container has an IP address
+    CONTAINER_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${CONTAINER_NAME}" 2>/dev/null)
+    if [ -n "$CONTAINER_IP" ]; then
+      echo "Container ${CONTAINER_NAME} is running with IP: $CONTAINER_IP"
+      break
+    fi
+  fi
+  attempt=$((attempt + 1))
+  sleep 1
+done
+
+if [ $attempt -eq $max_attempts ]; then
+  echo "Warning: Container ${CONTAINER_NAME} may not be fully ready yet"
+fi
+
 # Setup host routing rules for client profile (requires root/sudo)
+# Do this AFTER container is running so we can detect its IP and network
 if [ "$PROFILE" = "client" ]; then
   if [ -f "./setup_host_routing.sh" ]; then
     echo ""
