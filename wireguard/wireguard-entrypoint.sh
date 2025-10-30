@@ -36,6 +36,7 @@ $( [ -n "${CLIENT_DNS}" ] && echo "DNS = ${CLIENT_DNS}" )
 
 [Peer]
 PublicKey = ${SERVER_PUBLIC_KEY}
+$( [ -n "${SERVER_PRESHARED_KEY}" ] && echo "PresharedKey = ${SERVER_PRESHARED_KEY}" )
 Endpoint = ${CLIENT_ENDPOINT}:${CLIENT_PORT}
 AllowedIPs = ${ALLOWEDIPS}
 EOF
