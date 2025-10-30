@@ -329,41 +329,20 @@ if [ -z "$NETWORK_NAME" ]; then
 fi
 
 # 3. Get Docker bridge interface name
-# Try multiple methods to find the bridge
-BRIDGE_IF=$(docker network inspect "${NETWORK_NAME}" 2>/dev/null | grep -A 10 '"Containers"' | grep -o '"br-[^"]*"' | head -n1 | tr -d '"')
-if [ -z "$BRIDGE_IF" ]; then
-  # Fallback: find bridge by checking which interface has the container IP in its subnet
-  BRIDGE_IF=$(ip -br link show type bridge | awk '{print $1}' | while read iface; do
-    if [ -n "$iface" ] && ip addr show "$iface" 2>/dev/null | grep -q "$(echo $CONTAINER_IP | cut -d. -f1-3)"; then
-      echo "$iface"
-      break
-    fi
-  done)
-fi
-
-# Alternative: use network inspect to get gateway IP and find interface
-if [ -z "$BRIDGE_IF" ]; then
-  GATEWAY_IP=$(docker network inspect "${NETWORK_NAME}" 2>/dev/null | grep -i '"Gateway"' | head -n1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -n1)
-  if [ -n "$GATEWAY_IP" ]; then
-    BRIDGE_IF=$(ip addr show | grep -B 2 "$GATEWAY_IP" | head -n1 | awk '{print $2}' | tr -d ':')
-  fi
-fi
-
-# Last resort: find docker bridge by checking docker networks
-if [ -z "$BRIDGE_IF" ]; then
-  BRIDGE_IF=$(brctl show 2>/dev/null | grep -v "bridge name" | awk '{print $1}' | while read br; do
-    if docker network ls --format '{{.Name}}' | xargs -I {} docker network inspect {} 2>/dev/null | grep -q "\"$br\""; then
-      echo "$br"
-      break
-    fi
-  done)
-fi
-
-if [ -z "$BRIDGE_IF" ]; then
-  echo "Error: Could not detect Docker bridge interface"
-  echo "Please set it manually by editing this script or specify as argument: $0 <bridge_interface>"
+NETWORK_ID=$(docker network inspect "${NETWORK_NAME}" -f '{{.Id}}' 2>/dev/null)
+if [ -z "$NETWORK_ID" ]; then
+  echo "Error: Could not get Docker network ID"
   exit 1
 fi
+
+BRIDGE_IF="br-${NETWORK_ID:0:12}"
+
+# Verify bridge exists
+if ! ip link show "$BRIDGE_IF" &>/dev/null; then
+  echo "Error: Bridge interface $BRIDGE_IF does not exist"
+  exit 1
+fi
+
 echo "Docker bridge: $BRIDGE_IF"
 
 # 4. Get main internet interface (default route)
