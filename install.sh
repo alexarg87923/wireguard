@@ -7,6 +7,8 @@ rm ./stop_container.sh
 rm ./reset_container.sh
 rm ./gen_psk.sh
 rm ./gen_keys.sh
+rm ./setup_host_routing.sh
+rm ./remove_host_routing.sh
 
 echo "Installing WireGuard container management scripts..."
 
@@ -42,14 +44,58 @@ if [ "$PROFILE" = "client" ] && [ -z "$ALLOWEDIPS" ]; then
   exit 1
 fi
 
-if ! docker start "wireguard-$PROFILE" 2>/dev/null; then # if we failed
-  docker compose --profile ${PROFILE} up -d
+# Auto-detect HOST_PUBLIC_IP if not set (for client profile)
+if [ "$PROFILE" = "client" ] && [ -z "$HOST_PUBLIC_IP" ]; then
+  echo "Detecting host public IP..."
+  HOST_PUBLIC_IP=$(curl -s --max-time 3 ifconfig.me 2>/dev/null || curl -s --max-time 3 ip.pi 2>/dev/null || curl -s --max-time 3 ipinfo.io/ip 2>/dev/null || echo "")
+  if [ -z "$HOST_PUBLIC_IP" ] || [[ ! "$HOST_PUBLIC_IP" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+    echo "Warning: Could not auto-detect HOST_PUBLIC_IP. Please set it manually in .env"
+    echo "You can find it with: curl ifconfig.me"
+    exit 1
+  fi
+  export HOST_PUBLIC_IP
+  echo "Detected HOST_PUBLIC_IP: $HOST_PUBLIC_IP"
+fi
+
+# Always use docker compose to ensure containers are managed by compose
+docker compose --profile ${PROFILE} up -d
+
+# Setup host routing rules for client profile (requires root/sudo)
+if [ "$PROFILE" = "client" ]; then
+  if [ -f "./setup_host_routing.sh" ]; then
+    echo ""
+    echo "Setting up host routing rules..."
+    if [ "$EUID" -ne 0 ]; then
+      sudo ./setup_host_routing.sh
+    else
+      ./setup_host_routing.sh
+    fi
+  fi
 fi
 EOF
 
 # create stop_container.sh
 cat > stop_container.sh << 'EOF'
 #!/bin/bash
+
+ENV_FILE=./.env
+
+# Load .env to check PROFILE if available
+if [ -f "$ENV_FILE" ]; then
+  set -o allexport
+  source "$ENV_FILE"
+  set +o allexport
+fi
+
+# Remove host routing rules for client profile (requires root/sudo)
+if [ "${PROFILE:-}" = "client" ] && [ -f "./remove_host_routing.sh" ]; then
+  echo "Removing host routing rules..."
+  if [ "$EUID" -ne 0 ]; then
+    sudo ./remove_host_routing.sh
+  else
+    ./remove_host_routing.sh
+  fi
+fi
 
 docker compose down --remove-orphans
 EOF
@@ -191,16 +237,249 @@ echo "Private: $PRIV"
 echo "Public:  $PUB"
 EOF
 
+# create setup_host_routing.sh
+cat > setup_host_routing.sh << 'EOF'
+#!/bin/bash
+
+# Script to set up iptables rules on host to route traffic through WireGuard container
+# This is only needed for client profile
+
+set -euo pipefail
+
+# Check if running as root
+if [ "$EUID" -ne 0 ]; then 
+  echo "Error: This script must be run as root (use sudo)"
+  exit 1
+fi
+
+# Load .env to get PROFILE
+ENV_FILE=./.env
+if [ -f "$ENV_FILE" ]; then
+  set -o allexport
+  source "$ENV_FILE"
+  set +o allexport
+fi
+
+if [ "$PROFILE" != "client" ]; then
+  echo "Error: Host routing is only needed for client profile. Current PROFILE: ${PROFILE:-not set}"
+  exit 1
+fi
+
+CONTAINER_NAME="wireguard-client"
+
+# Check if container is running
+if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+  echo "Error: Container ${CONTAINER_NAME} is not running. Start it first with ./start_container.sh"
+  exit 1
+fi
+
+echo "Detecting network configuration..."
+
+# 1. Get container IP address
+CONTAINER_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${CONTAINER_NAME}" 2>/dev/null)
+if [ -z "$CONTAINER_IP" ]; then
+  echo "Error: Could not get container IP address"
+  exit 1
+fi
+echo "Container IP: $CONTAINER_IP"
+
+# 2. Get Docker network name
+NETWORK_NAME=$(docker inspect -f '{{range $key, $value := .NetworkSettings.Networks}}{{$key}}{{end}}' "${CONTAINER_NAME}" 2>/dev/null | head -n1)
+if [ -z "$NETWORK_NAME" ]; then
+  echo "Error: Could not get Docker network name"
+  exit 1
+fi
+
+# 3. Get Docker bridge interface name
+# Try multiple methods to find the bridge
+BRIDGE_IF=$(docker network inspect "${NETWORK_NAME}" 2>/dev/null | grep -A 10 '"Containers"' | grep -o '"br-[^"]*"' | head -n1 | tr -d '"')
+if [ -z "$BRIDGE_IF" ]; then
+  # Fallback: find bridge by checking which interface has the container IP in its subnet
+  BRIDGE_IF=$(ip -br link show type bridge | awk '{print $1}' | while read iface; do
+    if [ -n "$iface" ] && ip addr show "$iface" 2>/dev/null | grep -q "$(echo $CONTAINER_IP | cut -d. -f1-3)"; then
+      echo "$iface"
+      break
+    fi
+  done)
+fi
+
+# Alternative: use network inspect to get gateway IP and find interface
+if [ -z "$BRIDGE_IF" ]; then
+  GATEWAY_IP=$(docker network inspect "${NETWORK_NAME}" 2>/dev/null | grep -i '"Gateway"' | head -n1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -n1)
+  if [ -n "$GATEWAY_IP" ]; then
+    BRIDGE_IF=$(ip route get "$GATEWAY_IP" 2>/dev/null | awk '{print $3}' | head -n1)
+  fi
+fi
+
+# Last resort: find docker bridge by checking docker networks
+if [ -z "$BRIDGE_IF" ]; then
+  BRIDGE_IF=$(brctl show 2>/dev/null | grep -v "bridge name" | awk '{print $1}' | while read br; do
+    if docker network ls --format '{{.Name}}' | xargs -I {} docker network inspect {} 2>/dev/null | grep -q "\"$br\""; then
+      echo "$br"
+      break
+    fi
+  done)
+fi
+
+if [ -z "$BRIDGE_IF" ]; then
+  echo "Error: Could not detect Docker bridge interface"
+  echo "Please set it manually by editing this script or specify as argument: $0 <bridge_interface>"
+  exit 1
+fi
+echo "Docker bridge: $BRIDGE_IF"
+
+# 4. Get main internet interface (default route)
+MAIN_IF=$(ip route show default | awk '/default/ {print $5}' | head -n1)
+if [ -z "$MAIN_IF" ]; then
+  MAIN_IF=$(route -n 2>/dev/null | grep '^0.0.0.0' | awk '{print $8}' | head -n1)
+fi
+if [ -z "$MAIN_IF" ]; then
+  echo "Error: Could not detect main internet interface"
+  exit 1
+fi
+echo "Main interface: $MAIN_IF"
+
+# 5. Get container network subnet
+CONTAINER_SUBNET=$(docker network inspect "${NETWORK_NAME}" 2>/dev/null | grep -i '"Subnet"' | head -n1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+' | head -n1)
+if [ -z "$CONTAINER_SUBNET" ]; then
+  # Fallback: extract from container IP
+  CONTAINER_SUBNET=$(echo "$CONTAINER_IP" | awk -F. '{print $1"."$2"."$3".0/24"}')
+fi
+echo "Container subnet: $CONTAINER_SUBNET"
+
+echo ""
+echo "Setting up iptables rules..."
+
+# Clean up any existing rules first (idempotent)
+./remove_host_routing.sh 2>/dev/null || true
+
+# 1. Mark traffic in mangle table (except SSH to prevent lockout)
+iptables -t mangle -A OUTPUT -p tcp --sport 22 -j RETURN
+iptables -t mangle -A OUTPUT -p tcp --dport 22 -j RETURN
+iptables -t mangle -A OUTPUT -j MARK --set-mark 1
+
+# 2. Route marked packets to container via custom routing table
+# First check if table exists, create if not
+if ! grep -q "^200 vpn" /etc/iproute2/rt_tables 2>/dev/null; then
+  echo "200 vpn" >> /etc/iproute2/rt_tables 2>/dev/null || true
+fi
+
+# Add routing rule (idempotent check)
+if ! ip rule show | grep -q "fwmark 0x1 lookup vpn"; then
+  ip rule add fwmark 1 table vpn
+fi
+
+# Add route in vpn table
+ip route add default via "$CONTAINER_IP" dev "$BRIDGE_IF" table vpn 2>/dev/null || \
+  ip route replace default via "$CONTAINER_IP" dev "$BRIDGE_IF" table vpn
+
+# 3. Allow container traffic forwarding
+iptables -I FORWARD 1 -d "$CONTAINER_SUBNET" -j ACCEPT
+iptables -I FORWARD 1 -s "$CONTAINER_SUBNET" -j ACCEPT
+
+# 4. NAT for container's internet access
+iptables -t nat -A POSTROUTING -s "$CONTAINER_SUBNET" -o "$MAIN_IF" -j MASQUERADE
+
+echo "Host routing rules configured successfully!"
+echo ""
+echo "Configuration summary:"
+echo "  Container IP: $CONTAINER_IP"
+echo "  Docker bridge: $BRIDGE_IF"
+echo "  Main interface: $MAIN_IF"
+echo "  Container subnet: $CONTAINER_SUBNET"
+echo ""
+echo "To remove these rules, run: sudo ./remove_host_routing.sh"
+EOF
+
+# create remove_host_routing.sh
+cat > remove_host_routing.sh << 'EOF'
+#!/bin/bash
+
+# Script to remove iptables rules set up by setup_host_routing.sh
+
+set -e
+
+# Check if running as root
+if [ "$EUID" -ne 0 ]; then 
+  echo "Error: This script must be run as root (use sudo)"
+  exit 1
+fi
+
+echo "Removing host routing rules..."
+
+# Load .env to get container subnet if available
+ENV_FILE=./.env
+CONTAINER_SUBNET=""
+MAIN_IF=""
+
+if [ -f "$ENV_FILE" ]; then
+  set -o allexport
+  source "$ENV_FILE"
+  set +o allexport
+  
+  # Try to detect if container is running to get subnet
+  if docker ps --format '{{.Names}}' | grep -q "^wireguard-client$"; then
+    NETWORK_NAME=$(docker inspect -f '{{range $key, $value := .NetworkSettings.Networks}}{{$key}}{{end}}' "wireguard-client" 2>/dev/null | head -n1)
+    if [ -n "$NETWORK_NAME" ]; then
+      CONTAINER_SUBNET=$(docker network inspect "${NETWORK_NAME}" 2>/dev/null | grep -i '"Subnet"' | head -n1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+' | head -n1)
+    fi
+  fi
+  
+  MAIN_IF=$(ip route show default | awk '/default/ {print $5}' | head -n1)
+fi
+
+# Remove mangle rules
+iptables -t mangle -D OUTPUT -p tcp --sport 22 -j RETURN 2>/dev/null || true
+iptables -t mangle -D OUTPUT -p tcp --dport 22 -j RETURN 2>/dev/null || true
+iptables -t mangle -D OUTPUT -j MARK --set-mark 1 2>/dev/null || true
+
+# Remove routing rule
+ip rule del fwmark 1 table vpn 2>/dev/null || true
+
+# Remove route (try common defaults if detection failed)
+ip route del default table vpn 2>/dev/null || true
+
+# Remove FORWARD rules
+if [ -n "$CONTAINER_SUBNET" ]; then
+  iptables -D FORWARD -d "$CONTAINER_SUBNET" -j ACCEPT 2>/dev/null || true
+  iptables -D FORWARD -s "$CONTAINER_SUBNET" -j ACCEPT 2>/dev/null || true
+else
+  # Try common Docker subnets
+  for subnet in "172.18.0.0/16" "172.17.0.0/16" "192.168.0.0/16"; do
+    iptables -D FORWARD -d "$subnet" -j ACCEPT 2>/dev/null || true
+    iptables -D FORWARD -s "$subnet" -j ACCEPT 2>/dev/null || true
+  done
+fi
+
+# Remove NAT rule
+if [ -n "$CONTAINER_SUBNET" ] && [ -n "$MAIN_IF" ]; then
+  iptables -t nat -D POSTROUTING -s "$CONTAINER_SUBNET" -o "$MAIN_IF" -j MASQUERADE 2>/dev/null || true
+else
+  # Try to remove NAT rules matching common patterns
+  if [ -n "$MAIN_IF" ]; then
+    iptables -t nat -S POSTROUTING | grep "MASQUERADE.*$MAIN_IF" | sed 's/-A/-D/' | while read line; do
+      if echo "$line" | grep -q "172\."; then
+        eval "iptables $line" 2>/dev/null || true
+      fi
+    done
+  fi
+fi
+
+echo "Host routing rules removed!"
+EOF
+
 # only need to add execute permission
-chmod +x start_container.sh stop_container.sh reset_container.sh gen_psk.sh gen_keys.sh
+chmod +x start_container.sh stop_container.sh reset_container.sh gen_psk.sh gen_keys.sh setup_host_routing.sh remove_host_routing.sh
 
 echo "Installation complete!"
 echo "Available commands:"
-echo "  ./start_container.sh  - Start the container"
-echo "  ./stop_container.sh   - Stop the container"
-echo "  ./reset_container.sh  - Complete reset"
-echo "  ./gen_psk.sh <n>      - Generate PSK for peer n and update .env"
-echo "  ./gen_keys.sh <role>  - Generate keypair for 'server' or 'client' and update .env"
+echo "  ./start_container.sh           - Start the container"
+echo "  ./stop_container.sh            - Stop the container"
+echo "  ./reset_container.sh           - Complete reset"
+echo "  ./gen_psk.sh <n>               - Generate PSK for peer n and update .env"
+echo "  ./gen_keys.sh <role>           - Generate keypair for 'server' or 'client' and update .env"
+echo "  sudo ./setup_host_routing.sh   - Set up host routing rules (client only, requires root)"
+echo "  sudo ./remove_host_routing.sh  - Remove host routing rules (requires root)"
 
 # self distruct to remove attack vectors
 rm -- "$0"

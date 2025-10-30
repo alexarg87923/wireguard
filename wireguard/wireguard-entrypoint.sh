@@ -13,6 +13,27 @@ if [ "$MODE" = "client" ] || [ "$MODE" = "CLIENT" ]; then
     exit 1
   fi
 
+  # Dynamically detect CONTAINER_GATEWAY if not provided (Docker bridge gateway)
+  if [ -z "$CONTAINER_GATEWAY" ]; then
+    CONTAINER_GATEWAY=$(ip route show default 2>/dev/null | awk '/default/ {print $3}' | head -n1)
+    if [ -z "$CONTAINER_GATEWAY" ]; then
+      # Fallback: extract from Docker network interface (more portable method)
+      CONTAINER_GATEWAY=$(ip -4 addr show eth0 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d'/' -f1 | sed 's/\.[0-9]*$/.1/')
+    fi
+    if [ -z "$CONTAINER_GATEWAY" ]; then
+      echo "Warning: Could not auto-detect CONTAINER_GATEWAY. Please set it manually."
+      exit 1
+    fi
+    echo "Auto-detected CONTAINER_GATEWAY: $CONTAINER_GATEWAY"
+  fi
+
+  # HOST_PUBLIC_IP should be provided by start_container.sh
+  if [ -z "$HOST_PUBLIC_IP" ]; then
+    echo "Error: HOST_PUBLIC_IP is not set. This should be detected automatically by start_container.sh"
+    echo "If auto-detection fails, you can set it manually in .env or as an environment variable"
+    exit 1
+  fi
+
   # Client keys: prefer env-provided; else use existing files; else generate on first run
   if [ -n "${CLIENT_PRIVATE_KEY}" ]; then
       umask 077
@@ -33,8 +54,21 @@ if [ "$MODE" = "client" ] || [ "$MODE" = "CLIENT" ]; then
 [Interface]
 Address = ${CLIENT_IP}
 PrivateKey = $(cat ${KEY_DIR}/privatekey-client)
+
 PostUp = iptables -t nat -A POSTROUTING -o %i -j MASQUERADE
+PostUp = ip route add ${HOST_PUBLIC_IP} via ${CONTAINER_GATEWAY} dev eth0
+PostUp = ip route add ${CLIENT_ENDPOINT} via ${CONTAINER_GATEWAY} dev eth0
+PostUp = iptables -A FORWARD -j ACCEPT
+PostUp = iptables -t nat -A POSTROUTING -o %i -j SNAT --to-source ${CLIENT_IP}
+PostUp = ip route add default dev %i
+
+PostDown = ip route del ${HOST_PUBLIC_IP} via ${CONTAINER_GATEWAY} dev eth0
+PostDown = ip route del ${CLIENT_ENDPOINT} via ${CONTAINER_GATEWAY} dev eth0
+PostDown = ip route del default dev %i
+PostDown = iptables -D FORWARD -j ACCEPT
+PostDown = iptables -t nat -D POSTROUTING -o %i -j SNAT --to-source ${CLIENT_IP}
 PostDown = iptables -t nat -D POSTROUTING -o %i -j MASQUERADE
+
 $( [ -n "${CLIENT_DNS}" ] && echo "DNS = ${CLIENT_DNS}" )
 
 [Peer]
