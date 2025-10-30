@@ -78,9 +78,9 @@ PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -A FORWARD -o %i -j ACCEP
 PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -D FORWARD -o %i -j ACCEPT; iptables -t nat -D POSTROUTING -o eth+ -j MASQUERADE
 EOF
 
-  TOTAL_PEERS=${PEERS:-0}
   i=1
-  while [ $i -le $TOTAL_PEERS ]; do
+  generated=0
+  while true; do
     PUB_KEY_VAR=PEER${i}_PUBLIC_KEY
     ALLOWED_VAR=PEER${i}_ALLOWED_IPS
     PSK_VAR=PEER${i}_PRESHARED_KEY
@@ -89,8 +89,11 @@ EOF
     ALLOWED_VALUE=${!ALLOWED_VAR}
     PSK_VALUE=${!PSK_VAR}
 
-    if [ -z "$PUB_KEY_VALUE" ] || [ -z "$ALLOWED_VALUE" ]; then
-      echo "Missing ${PUB_KEY_VAR} or ${ALLOWED_VAR} for peer ${i}"
+    if [ -z "$PUB_KEY_VALUE" ]; then
+      break
+    fi
+    if [ -z "$ALLOWED_VALUE" ]; then
+      echo "Missing ${ALLOWED_VAR} for peer ${i}"
       exit 1
     fi
 
@@ -104,10 +107,26 @@ EOF
       fi
     } >> "$TEMPLATE_DIR/server.conf"
 
+    generated=$((generated+1))
     i=$((i+1))
   done
 
-  echo "Generated server template from env for ${TOTAL_PEERS} peers"
+  # Strict gap check: ensure indices 1..max are all defined if any higher exists
+  max_idx=$(env | grep -E '^PEER[0-9]+_PUBLIC_KEY=' | sed -E 's/^PEER([0-9]+)_PUBLIC_KEY=.*/\1/' | sort -n | tail -n 1)
+  if [ -n "$max_idx" ]; then
+    j=1
+    while [ $j -le $max_idx ]; do
+      test_var="PEER${j}_PUBLIC_KEY"
+      test_val=${!test_var}
+      if [ -z "$test_val" ]; then
+        echo "Gap detected: ${test_var} is missing while higher peers exist (max index $max_idx)"
+        exit 1
+      fi
+      j=$((j+1))
+    done
+  fi
+
+  echo "Generated server template from env for ${generated} peers"
 fi
 
 exec /init

@@ -5,6 +5,8 @@ echo "Removing commands if they exist"
 rm ./start_container.sh
 rm ./stop_container.sh
 rm ./reset_container.sh
+rm ./gen_psk.sh
+rm ./gen_keys.sh
 
 echo "Installing WireGuard container management scripts..."
 
@@ -68,7 +70,6 @@ docker images | awk '{print $3}' | grep -v IMAGE | xargs docker image rm
 rm -f ./wireguard/config/*.conf
 rm -f ./wireguard/keys/*-server
 rm -f ./wireguard/keys/*-client
-rm -f .env
 EOF
 
 # create gen_psk.sh
