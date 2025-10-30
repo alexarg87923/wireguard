@@ -96,8 +96,8 @@ if [ ! -f ./.env ]; then
   exit 1
 fi
 
-echo "Generating preshared key using WireGuard container..."
-PSK=$(docker run --rm lscr.io/linuxserver/wireguard:latest bash -lc 'umask 077; wg genpsk' | tr -d '\r')
+echo "Generating preshared key using Alpine (no special caps required)..."
+PSK=$(docker run --rm alpine:3 sh -c 'head -c 32 /dev/urandom | base64' | tr -d '\r')
 
 KEY="PEER${PEER_INDEX}_PRESHARED_KEY"
 
