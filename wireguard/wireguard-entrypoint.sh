@@ -36,6 +36,11 @@ if [ "$MODE" = "client" ] || [ "$MODE" = "CLIENT" ]; then
 
   # Extract IP address from CLIENT_IP (strip CIDR notation like /32)
   CLIENT_IP_ADDR="${CLIENT_IP%%/*}"
+  if [ -z "$CLIENT_IP_ADDR" ]; then
+    echo "Error: Failed to extract IP address from CLIENT_IP: ${CLIENT_IP}"
+    exit 1
+  fi
+  echo "Using CLIENT_IP_ADDR for iptables: $CLIENT_IP_ADDR (from CLIENT_IP: $CLIENT_IP)"
 
   # Client keys: prefer env-provided; else use existing files; else generate on first run
   if [ -n "${CLIENT_PRIVATE_KEY}" ]; then
