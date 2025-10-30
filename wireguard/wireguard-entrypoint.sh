@@ -1,6 +1,7 @@
 #!/bin/bash
 
 KEY_DIR="/config/server"
+CONFIG_DIR="/config/wg_confs"
 
 # MODE determined by PROFILE env passed via compose (server|client)
 MODE=${PROFILE}
@@ -26,7 +27,8 @@ if [ "$MODE" = "client" ] || [ "$MODE" = "CLIENT" ]; then
       wg genkey | tee "$KEY_DIR/privatekey-client" | wg pubkey > "$KEY_DIR/publickey-client"
   fi
 
-  cat > "/etc/wireguard/wg0.conf" <<EOF
+  mkdir -p "$CONFIG_DIR"
+  cat > "$CONFIG_DIR/wg0.conf" <<EOF
 [Interface]
 Address = ${CLIENT_IP}
 PrivateKey = $(cat ${KEY_DIR}/privatekey-client)
@@ -65,7 +67,8 @@ else
       wg genkey | tee "$KEY_DIR/privatekey-server" | wg pubkey > "$KEY_DIR/publickey-server"
   fi
 
-  cat > "/etc/wireguard/wg0.conf" <<EOF
+  mkdir -p "$CONFIG_DIR"
+  cat > "$CONFIG_DIR/wg0.conf" <<EOF
 [Interface]
 Address = ${INTERNAL_SUBNET}
 ListenPort = ${SERVER_PORT_VALUE}
@@ -98,7 +101,7 @@ EOF
       if [ -n "$PSK_VALUE" ]; then
         echo "PresharedKey = ${PSK_VALUE}"
       fi
-    } >> "/etc/wireguard/wg0.conf"
+    } >> "$CONFIG_DIR/wg0.conf"
 
     i=$((i+1))
   done
