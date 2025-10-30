@@ -11,7 +11,16 @@ if [ "$MODE" = "client" ] || [ "$MODE" = "CLIENT" ]; then
     exit 1
   fi
 
-  if [ ! -f "$KEY_DIR/privatekey-client" ]; then
+  # Client keys: prefer env-provided; else use existing files; else generate on first run
+  if [ -n "${CLIENT_PRIVATE_KEY}" ]; then
+      umask 077
+      printf "%s" "$CLIENT_PRIVATE_KEY" > "$KEY_DIR/privatekey-client"
+      if [ -n "${CLIENT_PUBLIC_KEY}" ]; then
+          printf "%s" "$CLIENT_PUBLIC_KEY" > "$KEY_DIR/publickey-client"
+      else
+          wg pubkey < "$KEY_DIR/privatekey-client" > "$KEY_DIR/publickey-client"
+      fi
+  elif [ ! -f "$KEY_DIR/privatekey-client" ]; then
       echo "No client keypair found, generating..."
       umask 077
       wg genkey | tee "$KEY_DIR/privatekey-client" | wg pubkey > "$KEY_DIR/publickey-client"
@@ -39,6 +48,21 @@ else
   fi
 
   SERVER_PORT_VALUE=${SERVER_PORT:-51821}
+
+  # Server keys: prefer env-provided; else use existing files; else generate on first run
+  if [ -n "${SERVER_PRIVATE_KEY}" ]; then
+      umask 077
+      printf "%s" "$SERVER_PRIVATE_KEY" > "$KEY_DIR/privatekey-server"
+      if [ -n "${SERVER_PUBLIC_KEY}" ]; then
+          printf "%s" "$SERVER_PUBLIC_KEY" > "$KEY_DIR/publickey-server"
+      else
+          wg pubkey < "$KEY_DIR/privatekey-server" > "$KEY_DIR/publickey-server"
+      fi
+  elif [ ! -f "$KEY_DIR/privatekey-server" ]; then
+      echo "No server keypair found, generating..."
+      umask 077
+      wg genkey | tee "$KEY_DIR/privatekey-server" | wg pubkey > "$KEY_DIR/publickey-server"
+  fi
 
   cat > "/etc/wireguard/wg0.conf" <<EOF
 [Interface]
