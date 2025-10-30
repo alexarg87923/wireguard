@@ -35,8 +35,8 @@ if [ -z "$PROFILE" ]; then
   exit 1
 fi
 
-if [ -z "$ALLOWEDIPS" ]; then
-  echo "Error: ALLOWEDIPS is not set in .env"
+if [ "$PROFILE" = "client" ] && [ -z "$ALLOWEDIPS" ]; then
+  echo "Error: ALLOWEDIPS is not set in .env (required for client profile)"
   exit 1
 fi
 
