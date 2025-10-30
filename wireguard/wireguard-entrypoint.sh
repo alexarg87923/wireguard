@@ -2,6 +2,7 @@
 
 KEY_DIR="/config/server"
 CONFIG_DIR="/config/wg_confs"
+TEMPLATE_DIR="/config/templates"
 
 # MODE determined by PROFILE env passed via compose (server|client)
 MODE=${PROFILE}
@@ -44,7 +45,7 @@ AllowedIPs = ${ALLOWEDIPS}
 EOF
   echo "Generated client wg0.conf from env"
 else
-  # SERVER mode: generate config from env; support multiple peers with optional PSKs
+  # SERVER mode: generate template from env; support multiple peers with optional PSKs
   if [ -z "$INTERNAL_SUBNET" ]; then
     echo "Missing required server env var: INTERNAL_SUBNET"
     exit 1
@@ -67,8 +68,8 @@ else
       wg genkey | tee "$KEY_DIR/privatekey-server" | wg pubkey > "$KEY_DIR/publickey-server"
   fi
 
-  mkdir -p "$CONFIG_DIR"
-  cat > "$CONFIG_DIR/wg0.conf" <<EOF
+  mkdir -p "$TEMPLATE_DIR"
+  cat > "$TEMPLATE_DIR/server.conf" <<EOF
 [Interface]
 Address = ${INTERNAL_SUBNET}
 ListenPort = ${SERVER_PORT_VALUE}
@@ -101,12 +102,12 @@ EOF
       if [ -n "$PSK_VALUE" ]; then
         echo "PresharedKey = ${PSK_VALUE}"
       fi
-    } >> "$CONFIG_DIR/wg0.conf"
+    } >> "$TEMPLATE_DIR/server.conf"
 
     i=$((i+1))
   done
 
-  echo "Generated server wg0.conf from env for ${TOTAL_PEERS} peers"
+  echo "Generated server template from env for ${TOTAL_PEERS} peers"
 fi
 
 exec /init

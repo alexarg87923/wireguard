@@ -12,7 +12,7 @@ services:
       - "3128:3128"
     environment:
       - ALLOWEDIPS=${ALLOWEDIPS}
-      - PEERS=${PEERS}
+      - PEERS=0
       - PROFILE=server
       - PUID=1000
       - PGID=1000
