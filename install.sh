@@ -345,7 +345,7 @@ fi
 if [ -z "$BRIDGE_IF" ]; then
   GATEWAY_IP=$(docker network inspect "${NETWORK_NAME}" 2>/dev/null | grep -i '"Gateway"' | head -n1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -n1)
   if [ -n "$GATEWAY_IP" ]; then
-    BRIDGE_IF=$(ip route get "$GATEWAY_IP" 2>/dev/null | awk '{print $3}' | head -n1)
+    BRIDGE_IF=$(ip addr show | grep -B 2 "$GATEWAY_IP" | head -n1 | awk '{print $2}' | tr -d ':')
   fi
 fi
 
