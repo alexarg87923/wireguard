@@ -18,37 +18,26 @@ mkdir -p wireguard/config wireguard/keys
 cat > start_container.sh << 'EOF'
 #!/bin/bash
 
-ENDPOINT_FILE=./wireguard/config/endpoint
-
-if [ -f $ENDPOINT_FILE ]; then
-  PROFILE="client"
-else
-  PROFILE="server"
-fi
-
 ENV_FILE=./.env
 
-if [ ! -f $ENV_FILE ]; then # check if we don't have a .env file, if we don't then generate one
-  echo "Generating .env file..."
-  
-  echo "PROFILE=$PROFILE" > .env
-  echo "COMPOSE_PROFILES=$PROFILE" >> .env
-  
-  # add allowedips since it is profile agnostic
-  if [ -f ./wireguard/config/allowed_ips ]; then
-    echo "ALLOWEDIPS=$(cat ./wireguard/config/allowed_ips)" >> .env
-  else
-    echo "Error: ./wireguard/config/allowed_ips file not found!"
-    exit 1
-  fi
-    
-  if [ $PROFILE == "server" ]; then
-    echo "Detected server mode (endpoint not found)"
-    echo "PEERS=0" >> .env # if theres an endpoint file then we are in server mode so add a server-specific env var
-  else
-    echo "Detected client mode (endpoint found)"
-    
-  fi
+if [ ! -f "$ENV_FILE" ]; then
+  echo "Error: .env file not found. Create it (e.g. copy .env.EXAMPLE) and configure."
+  exit 1
+fi
+
+# Load environment variables from .env
+set -o allexport
+source "$ENV_FILE"
+set +o allexport
+
+if [ -z "$PROFILE" ]; then
+  echo "Error: PROFILE is not set in .env"
+  exit 1
+fi
+
+if [ -z "$ALLOWEDIPS" ]; then
+  echo "Error: ALLOWEDIPS is not set in .env"
+  exit 1
 fi
 
 if ! docker start "wireguard-$PROFILE" 2>/dev/null; then # if we failed

@@ -13,13 +13,15 @@ services:
     environment:
       - ALLOWEDIPS=${ALLOWEDIPS}
       - PEERS=${PEERS}
+      - PROFILE=server
       - PUID=1000
       - PGID=1000
       - INTERNAL_SUBNET=10.0.2.1
       - LOG_CONFS=true
+    env_file:
+      - ./.env
     volumes:
       - ./wireguard/keys:/config/server
-      - ./wireguard/config:/config/wg_confs
     entrypoint: ["/bin/bash"]
     command: ["/config/wireguard-entrypoint.sh"]
   wireguard-client:
@@ -33,14 +35,22 @@ services:
     cap_add:
       - NET_ADMIN
     environment:
+      - PROFILE=client
+      - CLIENT_IP=${CLIENT_IP}
+      - CLIENT_DNS=${CLIENT_DNS}
+      - CLIENT_ENDPOINT=${CLIENT_ENDPOINT}
+      - CLIENT_PORT=${CLIENT_PORT}
+      - SERVER_PUBLIC_KEY=${SERVER_PUBLIC_KEY}
+      - ALLOWEDIPS=${ALLOWEDIPS}
       - PUID=1000
       - PGID=1000
       - INTERNAL_SUBNET=10.0.2.1
       - LOG_CONFS=true
+    env_file:
+      - ./.env
     sysctls:
       - net.ipv4.conf.all.src_valid_mark=1
     volumes:
       - ./wireguard/keys:/config/server
-      - ./wireguard/config:/config/wg_confs
     entrypoint: ["/bin/bash"]
     command: ["/config/wireguard-entrypoint.sh"]
