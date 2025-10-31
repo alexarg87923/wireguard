@@ -60,11 +60,9 @@ PostUp = ip route add ${HOST_PUBLIC_IP} via ${CONTAINER_GATEWAY} dev eth0
 PostUp = ip route add ${CLIENT_ENDPOINT} via ${CONTAINER_GATEWAY} dev eth0
 PostUp = iptables -A FORWARD -j ACCEPT
 PostUp = iptables -t nat -A POSTROUTING -o %i -j SNAT --to-source ${CLIENT_IP%%/*}
-PostUp = ip route add default dev %i
 
 PostDown = ip route del ${HOST_PUBLIC_IP} via ${CONTAINER_GATEWAY} dev eth0
 PostDown = ip route del ${CLIENT_ENDPOINT} via ${CONTAINER_GATEWAY} dev eth0
-PostDown = ip route del default dev %i
 PostDown = iptables -D FORWARD -j ACCEPT
 PostDown = iptables -t nat -D POSTROUTING -o %i -j SNAT --to-source ${CLIENT_IP%%/*}
 PostDown = iptables -t nat -D POSTROUTING -o %i -j MASQUERADE
