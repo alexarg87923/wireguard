@@ -48,8 +48,6 @@ services:
       - LOG_CONFS=true
     env_file:
       - ./.env
-    sysctls:
-      - net.ipv4.conf.all.src_valid_mark=1
     volumes:
       - ./wireguard/keys:/config/server
     entrypoint: ["/bin/bash"]
