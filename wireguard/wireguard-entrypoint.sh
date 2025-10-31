@@ -63,7 +63,7 @@ PostUp = iptables -A FORWARD -j ACCEPT
 PostUp = iptables -t nat -A POSTROUTING -o %i -m mark --mark 0xca6c -j SNAT --to-source ${CLIENT_IP%%/*}
 PostUp = iptables -t nat -A PREROUTING -i %i -d ${CLIENT_IP%%/*} -p tcp --dport 22 -j DNAT --to-destination ${CONTAINER_GATEWAY}:22
 
-PostUp = iptables -t nat -D PREROUTING -i %i -d ${CLIENT_IP%%/*} -p tcp --dport 22 -j DNAT --to-destination ${CONTAINER_GATEWAY}:22
+PostDown = iptables -t nat -D PREROUTING -i %i -d ${CLIENT_IP%%/*} -p tcp --dport 22 -j DNAT --to-destination ${CONTAINER_GATEWAY}:22
 PostDown = iptables -t nat -D POSTROUTING -o %i -m mark --mark 0xca6c -j SNAT --to-source ${CLIENT_IP%%/*}
 PostDown = iptables -D FORWARD -j ACCEPT
 PostDown = ip route del 172.17.0.0/16 via ${CONTAINER_GATEWAY} dev eth0 table 51820
