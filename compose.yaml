@@ -30,8 +30,7 @@ services:
       context: ./wireguard
       dockerfile: Dockerfile
     container_name: wireguard-client
-    ports:
-      - "3128:3128"
+    network_mode: host
     cap_add:
       - NET_ADMIN
     environment:
