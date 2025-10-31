@@ -30,7 +30,8 @@ services:
       context: ./wireguard
       dockerfile: Dockerfile
     container_name: wireguard-client
-    network_mode: host
+    ports:
+      - "3128:3128"
     cap_add:
       - NET_ADMIN
     environment:
@@ -48,6 +49,8 @@ services:
       - LOG_CONFS=true
     env_file:
       - ./.env
+    sysctls:
+      - net.ipv4.conf.all.src_valid_mark=1
     volumes:
       - ./wireguard/keys:/config/server
     entrypoint: ["/bin/bash"]

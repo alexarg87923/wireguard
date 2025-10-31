@@ -83,20 +83,19 @@ if [ $attempt -eq $max_attempts ]; then
   echo "Warning: Container ${CONTAINER_NAME} may not be fully ready yet"
 fi
 
-# Temporarily commented out - using network_mode: host
 # Setup host routing rules for client profile (requires root/sudo)
 # Do this AFTER container is running so we can detect its IP and network
-# if [ "$PROFILE" = "client" ]; then
-#   if [ -f "./setup_host_routing.sh" ]; then
-#     echo ""
-#     echo "Setting up host routing rules..."
-#     if [ "$EUID" -ne 0 ]; then
-#       sudo ./setup_host_routing.sh
-#     else
-#       ./setup_host_routing.sh
-#     fi
-#   fi
-# fi
+if [ "$PROFILE" = "client" ]; then
+  if [ -f "./setup_host_routing.sh" ]; then
+    echo ""
+    echo "Setting up host routing rules..."
+    if [ "$EUID" -ne 0 ]; then
+      sudo ./setup_host_routing.sh
+    else
+      ./setup_host_routing.sh
+    fi
+  fi
+fi
 EOF
 
 # create stop_container.sh
@@ -112,16 +111,15 @@ if [ -f "$ENV_FILE" ]; then
   set +o allexport
 fi
 
-# Temporarily commented out - using network_mode: host
 # Remove host routing rules for client profile (requires root/sudo)
-# if [ "${PROFILE:-}" = "client" ] && [ -f "./remove_host_routing.sh" ]; then
-#   echo "Removing host routing rules..."
-#   if [ "$EUID" -ne 0 ]; then
-#     sudo ./remove_host_routing.sh
-#   else
-#     ./remove_host_routing.sh
-#   fi
-# fi
+if [ "${PROFILE:-}" = "client" ] && [ -f "./remove_host_routing.sh" ]; then
+  echo "Removing host routing rules..."
+  if [ "$EUID" -ne 0 ]; then
+    sudo ./remove_host_routing.sh
+  else
+    ./remove_host_routing.sh
+  fi
+fi
 
 # Stop containers using the same profile that was used to start them
 if [ -z "${PROFILE:-}" ]; then
