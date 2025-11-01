@@ -55,7 +55,10 @@ if [ "$MODE" = "client" ] || [ "$MODE" = "CLIENT" ]; then
 Address = ${CLIENT_IP}
 PrivateKey = $(cat ${KEY_DIR}/privatekey-client)
 
-PostUp = iptables -t nat -A POSTROUTING -o eth0 -s 10.0.2.0/24 ! -d 172.17.0.0/16 ! -d 172.18.0.0/16 -j MASQUERADE
+PostUp = iptables -t nat -A POSTROUTING -o eth0 -s 10.0.2.0/24 -d 172.17.0.0/16 -j RETURN
+PostUp = iptables -t nat -A POSTROUTING -o eth0 -s 10.0.2.0/24 -d 172.18.0.0/16 -j RETURN
+PostUp = iptables -t nat -A POSTROUTING -o eth0 -s 10.0.2.0/24 -j MASQUERADE
+
 PostUp = ip route add ${HOST_PUBLIC_IP} via ${CONTAINER_GATEWAY} dev eth0 table 51820
 PostUp = ip route add ${CLIENT_ENDPOINT} via ${CONTAINER_GATEWAY} dev eth0 table 51820
 PostUp = ip route add 172.17.0.0/16 via ${CONTAINER_GATEWAY} dev eth0 table 51820
@@ -69,8 +72,10 @@ PostDown = iptables -D FORWARD -j ACCEPT
 PostDown = ip route del 172.17.0.0/16 via ${CONTAINER_GATEWAY} dev eth0 table 51820
 PostDown = ip route del ${CLIENT_ENDPOINT} via ${CONTAINER_GATEWAY} dev eth0 table 51820
 PostDown = ip route del ${HOST_PUBLIC_IP} via ${CONTAINER_GATEWAY} dev eth0 table 51820
-PostDown = iptables -t nat -D POSTROUTING -o eth0 -s 10.0.2.0/24 ! -d 172.17.0.0/16 ! -d 172.18.0.0/16 -j MASQUERADE
 
+PostDown = iptables -t nat -D POSTROUTING -o eth0 -s 10.0.2.0/24 -d 172.17.0.0/16 -j RETURN
+PostDown = iptables -t nat -D POSTROUTING -o eth0 -s 10.0.2.0/24 -d 172.18.0.0/16 -j RETURN
+PostDown = iptables -t nat -D POSTROUTING -o eth0 -s 10.0.2.0/24 -j MASQUERADE
 $( [ -n "${CLIENT_DNS}" ] && echo "DNS = ${CLIENT_DNS}" )
 
 [Peer]
