@@ -370,34 +370,14 @@ echo "Setting up iptables rules..."
 # Clean up any existing rules first (idempotent)
 ./remove_host_routing.sh 2>/dev/null || true
 
-# 1. Mark traffic in mangle table (except SSH to prevent lockout)
-iptables -t mangle -A OUTPUT -p tcp --sport 22 -j RETURN
-iptables -t mangle -A OUTPUT -p tcp --dport 22 -j RETURN
-iptables -t mangle -A OUTPUT -j MARK --set-mark 1
-
-# 2. Route marked packets to container via custom routing table
-# First check if table exists, create if not
-if ! grep -q "^200 vpn" /etc/iproute2/rt_tables 2>/dev/null; then
-  echo "200 vpn" >> /etc/iproute2/rt_tables 2>/dev/null || true
-fi
-
-# Add routing rule (idempotent check)
-if ! ip rule show | grep -q "fwmark 0x1 lookup vpn"; then
-  ip rule add fwmark 1 table vpn
-fi
-
-# Add route in vpn table
-ip route add default via "$CONTAINER_IP" dev "$BRIDGE_IF" table vpn 2>/dev/null || \
-  ip route replace default via "$CONTAINER_IP" dev "$BRIDGE_IF" table vpn
-
-# 3. Allow container traffic forwarding
+# 1. Allow container traffic forwarding
 iptables -I FORWARD 1 -d "$CONTAINER_SUBNET" -j ACCEPT
 iptables -I FORWARD 1 -s "$CONTAINER_SUBNET" -j ACCEPT
 
-# 4. NAT for container's internet access
+# 2. NAT for container's internet access
 iptables -t nat -A POSTROUTING -s "$CONTAINER_SUBNET" -o "$MAIN_IF" -j MASQUERADE
 
-# 5. Add route for VPN subnet to allow SSH replies back to VPN clients
+# 3. Add route for VPN subnet to allow SSH replies back to VPN clients
 echo "Adding route for VPN subnet (10.0.2.0/24) via container..."
 ip route add 10.0.2.0/24 via "$CONTAINER_IP" 2>/dev/null || \
   ip route replace 10.0.2.0/24 via "$CONTAINER_IP"
@@ -450,17 +430,6 @@ if [ -f "$ENV_FILE" ]; then
   
   MAIN_IF=$(ip route show default | awk '/default/ {print $5}' | head -n1)
 fi
-
-# Remove mangle rules
-iptables -t mangle -D OUTPUT -p tcp --sport 22 -j RETURN 2>/dev/null || true
-iptables -t mangle -D OUTPUT -p tcp --dport 22 -j RETURN 2>/dev/null || true
-iptables -t mangle -D OUTPUT -j MARK --set-mark 1 2>/dev/null || true
-
-# Remove routing rule
-ip rule del fwmark 1 table vpn 2>/dev/null || true
-
-# Remove route (try common defaults if detection failed)
-ip route del default table vpn 2>/dev/null || true
 
 # Remove VPN subnet route
 ip route del 10.0.2.0/24 2>/dev/null || true
