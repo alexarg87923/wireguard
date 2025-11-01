@@ -382,6 +382,12 @@ echo "Adding route for VPN subnet (10.0.2.0/24) via container..."
 ip route add 10.0.2.0/24 via "$CONTAINER_IP" 2>/dev/null || \
   ip route replace 10.0.2.0/24 via "$CONTAINER_IP"
 
+# 4. Add UFW rules for VPN access
+echo "Adding UFW rules..."
+ufw allow from 10.0.2.0/24 to any port 22 comment "WireGuard VPN SSH access"
+ufw route allow from "$CONTAINER_SUBNET" to any port 22 comment "WireGuard container forwarding"
+ufw --force reload > /dev/null
+
 echo "Host routing rules configured successfully!"
 echo ""
 echo "Configuration summary:"
@@ -390,6 +396,7 @@ echo "  Docker bridge: $BRIDGE_IF"
 echo "  Main interface: $MAIN_IF"
 echo "  Container subnet: $CONTAINER_SUBNET"
 echo "  VPN subnet route: 10.0.2.0/24 via $CONTAINER_IP"
+echo "  UFW rules: SSH access from VPN and container forwarding"
 echo ""
 echo "To remove these rules, run: sudo ./remove_host_routing.sh"
 EOF
@@ -458,6 +465,40 @@ else
       fi
     done
   fi
+fi
+
+# Remove UFW rules
+echo "Removing UFW rules..."
+if command -v ufw >/dev/null 2>&1; then
+  # Remove UFW rule for VPN SSH access (always 10.0.2.0/24)
+  # Try deleting by rule syntax first, then by rule number if that fails
+  if ! echo "y" | ufw delete allow from 10.0.2.0/24 to any port 22 2>/dev/null; then
+    # Fallback: find rule by comment and delete by number
+    ufw status numbered 2>/dev/null | grep -i "WireGuard VPN SSH access" | awk -F'[][]' '{print $2}' | sort -rn | while read num; do
+      echo "y" | ufw delete "$num" 2>/dev/null || true
+    done || true
+  fi
+  
+  # Remove UFW route rule for container forwarding
+  if [ -n "$CONTAINER_SUBNET" ]; then
+    # Try deleting route rule by syntax
+    if ! echo "y" | ufw route delete allow from "$CONTAINER_SUBNET" to any port 22 2>/dev/null; then
+      # Fallback: find route rule by comment in route status
+      ufw status numbered 2>/dev/null | grep -i "WireGuard container forwarding" | awk -F'[][]' '{print $2}' | sort -rn | while read num; do
+        echo "y" | ufw delete "$num" 2>/dev/null || true
+      done || true
+    fi
+  else
+    # Try to remove by comment if subnet not available
+    ufw status numbered 2>/dev/null | grep -i "WireGuard container forwarding" | awk -F'[][]' '{print $2}' | sort -rn | while read num; do
+      echo "y" | ufw delete "$num" 2>/dev/null || true
+    done || true
+  fi
+  
+  # Reload UFW to apply changes
+  ufw --force reload >/dev/null 2>&1 || true
+else
+  echo "UFW not found, skipping UFW rule removal"
 fi
 
 echo "Host routing rules removed!"
