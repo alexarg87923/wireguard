@@ -397,6 +397,11 @@ iptables -I FORWARD 1 -s "$CONTAINER_SUBNET" -j ACCEPT
 # 4. NAT for container's internet access
 iptables -t nat -A POSTROUTING -s "$CONTAINER_SUBNET" -o "$MAIN_IF" -j MASQUERADE
 
+# 5. Add route for VPN subnet to allow SSH replies back to VPN clients
+echo "Adding route for VPN subnet (10.0.2.0/24) via container..."
+ip route add 10.0.2.0/24 via "$CONTAINER_IP" 2>/dev/null || \
+  ip route replace 10.0.2.0/24 via "$CONTAINER_IP"
+
 echo "Host routing rules configured successfully!"
 echo ""
 echo "Configuration summary:"
@@ -404,6 +409,7 @@ echo "  Container IP: $CONTAINER_IP"
 echo "  Docker bridge: $BRIDGE_IF"
 echo "  Main interface: $MAIN_IF"
 echo "  Container subnet: $CONTAINER_SUBNET"
+echo "  VPN subnet route: 10.0.2.0/24 via $CONTAINER_IP"
 echo ""
 echo "To remove these rules, run: sudo ./remove_host_routing.sh"
 EOF
@@ -455,6 +461,9 @@ ip rule del fwmark 1 table vpn 2>/dev/null || true
 
 # Remove route (try common defaults if detection failed)
 ip route del default table vpn 2>/dev/null || true
+
+# Remove VPN subnet route
+ip route del 10.0.2.0/24 2>/dev/null || true
 
 # Remove FORWARD rules
 if [ -n "$CONTAINER_SUBNET" ]; then

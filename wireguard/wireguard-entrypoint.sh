@@ -76,6 +76,7 @@ PostDown = ip route del ${HOST_PUBLIC_IP} via ${CONTAINER_GATEWAY} dev eth0 tabl
 PostDown = iptables -t nat -D POSTROUTING -o eth0 -s 10.0.2.0/24 -d 172.17.0.0/16 -j RETURN
 PostDown = iptables -t nat -D POSTROUTING -o eth0 -s 10.0.2.0/24 -d 172.18.0.0/16 -j RETURN
 PostDown = iptables -t nat -D POSTROUTING -o eth0 -s 10.0.2.0/24 -j MASQUERADE
+
 $( [ -n "${CLIENT_DNS}" ] && echo "DNS = ${CLIENT_DNS}" )
 
 [Peer]
