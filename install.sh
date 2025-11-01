@@ -385,6 +385,7 @@ ip route add 10.0.2.0/24 via "$CONTAINER_IP" 2>/dev/null || \
 # 4. Add UFW rules for VPN access
 echo "Adding UFW rules..."
 ufw allow from 10.0.2.0/24 to any port 22 comment "WireGuard VPN SSH access"
+ufw allow from 10.0.2.0/24 to any port 8080 comment "Web"
 ufw route allow from "$CONTAINER_SUBNET" to any port 22 comment "WireGuard container forwarding"
 ufw --force reload > /dev/null
 
