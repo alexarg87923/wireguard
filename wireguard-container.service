@@ -1,0 +1,7 @@
+[Unit]
+[Service]
+EnvironmentFile=/root/wireguard/.env
+ExecStart=/bin/bash -c "/root/wireguard/start_container.sh"
+ExecStop=/bin/bash -c "/root/wireguard/stop_container.sh"
+ExecRestart=/bin/bash -c "/root/wireguard/reset_container.sh"
+[Install]
