@@ -86,9 +86,11 @@ fi
 # Setup host routing rules for client profile (requires root/sudo)
 # Do this AFTER container is running so we can detect its IP and network
 if [ "$PROFILE" = "client" ]; then
+  echo "Detected client profile, removing emergency access rule if it exists..."
+  iptables -D INPUT -p tcp --dport 22 -s ${CLIENT_ENDPOINT} -j ACCEPT -m comment --comment "Emergency Access"
+
   if [ -f "./setup_host_routing.sh" ]; then
-    echo ""
-    echo "Setting up host routing rules..."
+    echo "Invoking setup_host_routing.sh..."
     if [ "$EUID" -ne 0 ]; then
       sudo ./setup_host_routing.sh
     else
