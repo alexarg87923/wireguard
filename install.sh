@@ -111,13 +111,17 @@ if [ -f "$ENV_FILE" ]; then
   set +o allexport
 fi
 
-# Remove host routing rules for client profile (requires root/sudo)
-if [ "${PROFILE:-}" = "client" ] && [ -f "./remove_host_routing.sh" ]; then
-  echo "Removing host routing rules..."
-  if [ "$EUID" -ne 0 ]; then
-    sudo ./remove_host_routing.sh
-  else
-    ./remove_host_routing.sh
+if [ "${PROFILE:-}" = "client" ]; then
+  echo "Detected client profile, adding emergency access rule..."
+  iptables -A INPUT -p tcp --dport 22 -s ${CLIENT_ENDPOINT} -j ACCEPT -m comment --comment "Emergency Access"
+
+  if [ -f "./remove_host_routing.sh" ]; then
+    echo "Invoking remove_host_routing.sh..."
+    if [ "$EUID" -ne 0 ]; then
+      sudo ./remove_host_routing.sh
+    else
+      ./remove_host_routing.sh
+    fi
   fi
 fi
 
@@ -141,19 +145,20 @@ EOF
 # create reset_container.sh
 cat > reset_container.sh << 'EOF'
 #!/bin/bash
-./stop_container.sh
+echo "Resetting container..."
 
-# prune containers and volumes
-docker container prune -f
-docker volume prune -f
+echo "Checking if stop_container.sh exists..."
+if [ -f "./stop_container.sh" ]; then
+  echo "Executing stop_container.sh..."
+  ./stop_container.sh
+fi
 
-# remove all images
-docker images | awk '{print $3}' | grep -v IMAGE | xargs docker image rm
+echo "Pruning containers and volumes..."
+docker container prune -f || true
+docker volume prune -f || true
 
-# clean up generated config files
-rm -f ./wireguard/config/*.conf
-rm -f ./wireguard/keys/*-server
-rm -f ./wireguard/keys/*-client
+echo "Removing all images..."
+docker images | awk '{print $3}' | grep -v IMAGE | xargs docker image rm || true
 EOF
 
 # create gen_psk.sh
@@ -383,12 +388,10 @@ ip route add 10.0.2.0/24 via "$CONTAINER_IP" 2>/dev/null || \
   ip route replace 10.0.2.0/24 via "$CONTAINER_IP"
 
 # 4. Add UFW rules for VPN access
-echo "Adding UFW rules..."
-ufw allow from 10.0.2.0/24 to any port 22 comment "WireGuard VPN SSH access"
-ufw allow from 10.0.2.0/24 to any port 8080 comment "Web"
-ufw allow from 10.0.2.0/24 to any port 4020 comment "Backend"
-ufw route allow from "$CONTAINER_SUBNET" to any port 22 comment "WireGuard container forwarding"
-ufw --force reload > /dev/null
+echo "Adding iptables rules..."
+iptables -A INPUT -s ${CLIENT_SUBNET} -p tcp --dport 22 -j ACCEPT -m comment --comment "SSH"
+iptables -A INPUT -s ${CLIENT_SUBNET} -p tcp --dport 8080 -j ACCEPT -m comment --comment "Web"
+iptables -A INPUT -s ${CLIENT_SUBNET} -p tcp --dport 4020 -j ACCEPT -m comment --comment "Backend"
 
 echo "Host routing rules configured successfully!"
 echo ""
@@ -469,39 +472,35 @@ else
   fi
 fi
 
-# Remove UFW rules
-echo "Removing UFW rules..."
-if command -v ufw >/dev/null 2>&1; then
-  # Remove UFW rule for VPN SSH access (always 10.0.2.0/24)
-  # Try deleting by rule syntax first, then by rule number if that fails
-  if ! echo "y" | ufw delete allow from 10.0.2.0/24 to any port 22 2>/dev/null; then
-    # Fallback: find rule by comment and delete by number
-    ufw status numbered 2>/dev/null | grep -i "WireGuard VPN SSH access" | awk -F'[][]' '{print $2}' | sort -rn | while read num; do
-      echo "y" | ufw delete "$num" 2>/dev/null || true
-    done || true
-  fi
+# Remove VPN iptables rules
+echo "Removing VPN iptables rules..."
+
+# Remove iptables rules by comment (SSH, Web, Backend)
+# Remove rules by trying to delete them directly if CLIENT_SUBNET is available
+if [ -n "${CLIENT_SUBNET:-}" ]; then
+  # Remove SSH rule (port 22)
+  iptables -D INPUT -s "${CLIENT_SUBNET}" -p tcp --dport 22 -j ACCEPT -m comment --comment "SSH" 2>/dev/null || true
   
-  # Remove UFW route rule for container forwarding
-  if [ -n "$CONTAINER_SUBNET" ]; then
-    # Try deleting route rule by syntax
-    if ! echo "y" | ufw route delete allow from "$CONTAINER_SUBNET" to any port 22 2>/dev/null; then
-      # Fallback: find route rule by comment in route status
-      ufw status numbered 2>/dev/null | grep -i "WireGuard container forwarding" | awk -F'[][]' '{print $2}' | sort -rn | while read num; do
-        echo "y" | ufw delete "$num" 2>/dev/null || true
-      done || true
-    fi
-  else
-    # Try to remove by comment if subnet not available
-    ufw status numbered 2>/dev/null | grep -i "WireGuard container forwarding" | awk -F'[][]' '{print $2}' | sort -rn | while read num; do
-      echo "y" | ufw delete "$num" 2>/dev/null || true
-    done || true
-  fi
+  # Remove Web rule (port 8080)
+  iptables -D INPUT -s "${CLIENT_SUBNET}" -p tcp --dport 8080 -j ACCEPT -m comment --comment "Web" 2>/dev/null || true
   
-  # Reload UFW to apply changes
-  ufw --force reload >/dev/null 2>&1 || true
-else
-  echo "UFW not found, skipping UFW rule removal"
+  # Remove Backend rule (port 4020)
+  iptables -D INPUT -s "${CLIENT_SUBNET}" -p tcp --dport 4020 -j ACCEPT -m comment --comment "Backend" 2>/dev/null || true
 fi
+
+# Fallback: Remove rules by finding them via comment using iptables -S
+# This handles cases where CLIENT_SUBNET is not available or rules don't match exactly
+for comment in "SSH" "Web" "Backend"; do
+  # Use iptables -S to find rules with matching comments and delete them
+  # iptables -S outputs rules in a format that can be converted to delete commands
+  iptables -S INPUT 2>/dev/null | grep -- "--comment \"${comment}\"" | while read rule; do
+    if [ -n "$rule" ]; then
+      # Convert -A to -D and execute
+      delete_rule=$(echo "$rule" | sed 's/^-A/-D/')
+      eval "iptables $delete_rule" 2>/dev/null || true
+    fi
+  done || true
+done
 
 echo "Host routing rules removed!"
 EOF
