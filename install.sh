@@ -9,6 +9,7 @@ rm ./gen_psk.sh
 rm ./gen_keys.sh
 rm ./setup_host_routing.sh
 rm ./remove_host_routing.sh
+rm ./setup_minio.sh
 
 echo "Installing WireGuard container management scripts..."
 
@@ -96,6 +97,12 @@ if [ "$PROFILE" = "client" ]; then
     else
       ./setup_host_routing.sh
     fi
+  fi
+
+  # Setup MinIO buckets automatically
+  if [ -f "./setup_minio.sh" ]; then
+    echo "Setting up MinIO buckets..."
+    ./setup_minio.sh
   fi
 fi
 EOF
@@ -391,9 +398,10 @@ ip route add 10.0.2.0/24 via "$CONTAINER_IP" 2>/dev/null || \
 
 # 4. Add UFW rules for VPN access
 echo "Adding iptables rules..."
-iptables -A INPUT -s ${CLIENT_SUBNET} -p tcp --dport 22 -j ACCEPT -m comment --comment "SSH"
-iptables -A INPUT -s ${CLIENT_SUBNET} -p tcp --dport 8080 -j ACCEPT -m comment --comment "Web"
-iptables -A INPUT -s ${CLIENT_SUBNET} -p tcp --dport 4020 -j ACCEPT -m comment --comment "Backend"
+iptables -A INPUT -s ${CLIENT_SUBNET} -p tcp --dport ${SSH_PORT:-22} -j ACCEPT -m comment --comment "SSH"
+iptables -A INPUT -s ${CLIENT_SUBNET} -p tcp --dport ${MINIO_WEB_PORT:-8080} -j ACCEPT -m comment --comment "MinIO-Web"
+iptables -A INPUT -s ${CLIENT_SUBNET} -p tcp --dport ${MINIO_CONSOLE_PORT:-4020} -j ACCEPT -m comment --comment "MinIO-Console"
+iptables -A INPUT -s ${CLIENT_SUBNET} -p tcp --dport ${BACKEND_PORT:-3060} -j ACCEPT -m comment --comment "Backend"
 
 echo "Host routing rules configured successfully!"
 echo ""
@@ -477,22 +485,25 @@ fi
 # Remove VPN iptables rules
 echo "Removing VPN iptables rules..."
 
-# Remove iptables rules by comment (SSH, Web, Backend)
+# Remove iptables rules by comment (SSH, MinIO, Backend)
 # Remove rules by trying to delete them directly if CLIENT_SUBNET is available
 if [ -n "${CLIENT_SUBNET:-}" ]; then
-  # Remove SSH rule (port 22)
-  iptables -D INPUT -s "${CLIENT_SUBNET}" -p tcp --dport 22 -j ACCEPT -m comment --comment "SSH" 2>/dev/null || true
-  
-  # Remove Web rule (port 8080)
-  iptables -D INPUT -s "${CLIENT_SUBNET}" -p tcp --dport 8080 -j ACCEPT -m comment --comment "Web" 2>/dev/null || true
-  
-  # Remove Backend rule (port 4020)
-  iptables -D INPUT -s "${CLIENT_SUBNET}" -p tcp --dport 4020 -j ACCEPT -m comment --comment "Backend" 2>/dev/null || true
+  # Remove SSH rule (use port from env or default)
+  iptables -D INPUT -s "${CLIENT_SUBNET}" -p tcp --dport ${SSH_PORT:-22} -j ACCEPT -m comment --comment "SSH" 2>/dev/null || true
+
+  # Remove MinIO Web rule (use port from env or default)
+  iptables -D INPUT -s "${CLIENT_SUBNET}" -p tcp --dport ${MINIO_WEB_PORT:-8080} -j ACCEPT -m comment --comment "MinIO-Web" 2>/dev/null || true
+
+  # Remove MinIO Console rule (use port from env or default)
+  iptables -D INPUT -s "${CLIENT_SUBNET}" -p tcp --dport ${MINIO_CONSOLE_PORT:-4020} -j ACCEPT -m comment --comment "MinIO-Console" 2>/dev/null || true
+
+  # Remove Backend rule (use port from env or default)
+  iptables -D INPUT -s "${CLIENT_SUBNET}" -p tcp --dport ${BACKEND_PORT:-3060} -j ACCEPT -m comment --comment "Backend" 2>/dev/null || true
 fi
 
 # Fallback: Remove rules by finding them via comment using iptables -S
 # This handles cases where CLIENT_SUBNET is not available or rules don't match exactly
-for comment in "SSH" "Web" "Backend"; do
+for comment in "SSH" "MinIO-Web" "MinIO-Console" "Backend"; do
   # Use iptables -S to find rules with matching comments and delete them
   # iptables -S outputs rules in a format that can be converted to delete commands
   iptables -S INPUT 2>/dev/null | grep -- "--comment \"${comment}\"" | while read rule; do
@@ -507,8 +518,101 @@ done
 echo "Host routing rules removed!"
 EOF
 
+# create setup_minio.sh
+cat > setup_minio.sh << 'EOF'
+#!/bin/bash
+
+# Script to set up MinIO buckets and permissions after container starts
+# This script should be run after the MinIO container is up and running
+
+set -euo pipefail
+
+# Load .env to get MinIO credentials and bucket names
+ENV_FILE=./.env
+if [ -f "$ENV_FILE" ]; then
+  set -o allexport
+  source "$ENV_FILE"
+  set +o allexport
+fi
+
+# Set defaults if not specified
+MINIO_ROOT_USER="${MINIO_ROOT_USER:-admin}"
+MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-miniopassword}"
+MINIO_PUBLIC_BUCKETS="${MINIO_PUBLIC_BUCKETS:-public}"
+MINIO_WEB_PORT="${MINIO_WEB_PORT:-8080}"
+MINIO_CONSOLE_PORT="${MINIO_CONSOLE_PORT:-4020}"
+MINIO_ENDPOINT="http://localhost:${MINIO_WEB_PORT}"
+
+# Check if MinIO container is running
+if ! docker ps --format '{{.Names}}' | grep -q "^minio$"; then
+  echo "Error: MinIO container is not running. Start it first with ./start_container.sh"
+  exit 1
+fi
+
+echo "Waiting for MinIO to be ready..."
+max_attempts=30
+attempt=0
+while [ $attempt -lt $max_attempts ]; do
+  if curl -sf "${MINIO_ENDPOINT}/minio/health/live" > /dev/null 2>&1; then
+    echo "MinIO is ready!"
+    break
+  fi
+  attempt=$((attempt + 1))
+  sleep 1
+done
+
+if [ $attempt -eq $max_attempts ]; then
+  echo "Error: MinIO did not become ready in time"
+  exit 1
+fi
+
+echo "Setting up MinIO configuration..."
+
+# Use MinIO client in a container to configure MinIO
+# Set up alias
+docker run --rm --network host \
+  --entrypoint /bin/sh \
+  minio/mc:latest \
+  -c "
+    mc alias set myminio ${MINIO_ENDPOINT} ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD} && \
+    echo 'MinIO alias configured successfully' && \
+
+    # Create and configure each bucket
+    IFS=',' read -ra BUCKETS <<< '${MINIO_PUBLIC_BUCKETS}' && \
+    for bucket in \"\${BUCKETS[@]}\"; do
+      bucket=\$(echo \$bucket | xargs)  # trim whitespace
+      if [ -n \"\$bucket\" ]; then
+        echo \"Creating bucket: \$bucket\" && \
+        mc mb myminio/\$bucket --ignore-existing && \
+        echo \"Setting public read policy on bucket: \$bucket\" && \
+        mc anonymous set download myminio/\$bucket && \
+        echo \"Bucket \$bucket is now publicly accessible for downloads\"
+      fi
+    done && \
+
+    echo '' && \
+    echo 'MinIO setup complete!' && \
+    echo 'Created public buckets: ${MINIO_PUBLIC_BUCKETS}' && \
+    echo '' && \
+    echo 'Access MinIO:' && \
+    echo '  Web UI (Console): http://localhost:${MINIO_CONSOLE_PORT}' && \
+    echo '  API Endpoint: ${MINIO_ENDPOINT}' && \
+    echo '  Username: ${MINIO_ROOT_USER}' && \
+    echo '  Password: [hidden]'
+  "
+
+if [ $? -eq 0 ]; then
+  echo ""
+  echo "MinIO buckets configured successfully!"
+else
+  echo ""
+  echo "Error: Failed to configure MinIO buckets"
+  exit 1
+fi
+EOF
+
 # only need to add execute permission
-chmod +x start_container.sh stop_container.sh reset_container.sh gen_psk.sh gen_keys.sh setup_host_routing.sh remove_host_routing.sh
+chmod +x start_container.sh stop_container.sh reset_container.sh gen_psk.sh gen_keys.sh setup_host_routing.sh remove_host_routing.sh setup_minio.sh
 
 echo "Installation complete!"
 echo "Available commands:"
@@ -519,6 +623,7 @@ echo "  ./gen_psk.sh <n>               - Generate PSK for peer n and update .env
 echo "  ./gen_keys.sh <role>           - Generate keypair for 'server' or 'client' and update .env"
 echo "  sudo ./setup_host_routing.sh   - Set up host routing rules (client only, requires root)"
 echo "  sudo ./remove_host_routing.sh  - Remove host routing rules (requires root)"
+echo "  ./setup_minio.sh               - Set up MinIO buckets (client only, auto-run by start_container.sh)"
 
 # self distruct to remove attack vectors
 rm -- "$0"
