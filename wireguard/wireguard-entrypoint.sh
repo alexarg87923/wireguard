@@ -1,15 +1,31 @@
 #!/bin/bash
+set -x  # Enable debug mode to see all commands
 
 KEY_DIR="/config/server"
 CONFIG_DIR="/config/wg_confs"
 TEMPLATE_DIR="/config/templates"
+LOG_FILE="/config/entrypoint.log"
+
+# Setup logging function that writes to both stderr and log file
+log() {
+  echo "$(date '+%Y-%m-%d %H:%M:%S') - $*" | tee -a "$LOG_FILE" >&2
+}
+
+# Create log file
+mkdir -p "$(dirname "$LOG_FILE")"
+touch "$LOG_FILE"
 
 # MODE determined by PROFILE env passed via compose (server|client)
 MODE=${PROFILE}
 
+log "=== WireGuard Entrypoint Script Starting ==="
+log "MODE: $MODE"
+log "PROFILE: $PROFILE"
+
 if [ "$MODE" = "client" ] || [ "$MODE" = "CLIENT" ]; then
+  log "Running in CLIENT mode..."
   if [ -z "$CLIENT_IP" ] || [ -z "$CLIENT_ENDPOINT" ] || [ -z "$CLIENT_PORT" ] || [ -z "$ALLOWEDIPS" ] || [ -z "$SERVER_PUBLIC_KEY" ]; then
-    echo "Missing required client env vars: CLIENT_IP, CLIENT_ENDPOINT, CLIENT_PORT, ALLOWEDIPS, SERVER_PUBLIC_KEY"
+    log "Missing required client env vars: CLIENT_IP, CLIENT_ENDPOINT, CLIENT_PORT, ALLOWEDIPS, SERVER_PUBLIC_KEY"
     exit 1
   fi
 
@@ -21,17 +37,19 @@ if [ "$MODE" = "client" ] || [ "$MODE" = "CLIENT" ]; then
       CONTAINER_GATEWAY=$(ip -4 addr show eth0 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d'/' -f1 | sed 's/\.[0-9]*$/.1/')
     fi
     if [ -z "$CONTAINER_GATEWAY" ]; then
-      echo "Warning: Could not auto-detect CONTAINER_GATEWAY. Please set it manually."
+      log "Warning: Could not auto-detect CONTAINER_GATEWAY. Please set it manually."
       exit 1
     fi
-    echo "Auto-detected CONTAINER_GATEWAY: $CONTAINER_GATEWAY"
+    log "Auto-detected CONTAINER_GATEWAY: $CONTAINER_GATEWAY"
   fi
 
   # Resolve MinIO container IP using Docker network DNS (containers share the same network)
   # iptables requires an IP address, so we resolve the container name "minio" to its IP
+  log "=== Starting MinIO IP Resolution ==="
   if [ -z "$MINIO_CONTAINER_IP" ]; then
     # Wait for MinIO container to be resolvable (with retries)
-    echo "Waiting for MinIO container to be available..."
+    log "MINIO_CONTAINER_IP not set, attempting to resolve..."
+    log "Waiting for MinIO container to be available..."
     max_attempts=30
     attempt=0
     MINIO_CONTAINER_IP=""
@@ -39,30 +57,31 @@ if [ "$MODE" = "client" ] || [ "$MODE" = "CLIENT" ]; then
     while [ $attempt -lt $max_attempts ]; do
       MINIO_CONTAINER_IP=$(getent hosts minio 2>/dev/null | awk '{print $1}' | head -n1)
       if [ -n "$MINIO_CONTAINER_IP" ]; then
-        echo "Resolved MinIO container IP: $MINIO_CONTAINER_IP (from hostname 'minio')"
+        log "Resolved MinIO container IP: $MINIO_CONTAINER_IP (from hostname 'minio')"
         break
       fi
       attempt=$((attempt + 1))
       if [ $attempt -lt $max_attempts ]; then
-        echo "Attempt $attempt/$max_attempts: MinIO not yet resolvable, waiting 2 seconds..."
+        log "Attempt $attempt/$max_attempts: MinIO not yet resolvable, waiting 2 seconds..."
+        log "  Debug: getent hosts minio output: $(getent hosts minio 2>&1 || echo 'failed')"
         sleep 2
       fi
     done
     
     if [ -z "$MINIO_CONTAINER_IP" ]; then
-      echo "Warning: Could not resolve MinIO container IP from hostname 'minio' after $max_attempts attempts."
-      echo "MinIO DNAT rules will be skipped. Ensure MinIO container is running and on the same network."
-      echo "You can set MINIO_CONTAINER_IP manually in .env if needed."
+      log "Warning: Could not resolve MinIO container IP from hostname 'minio' after $max_attempts attempts."
+      log "MinIO DNAT rules will be skipped. Ensure MinIO container is running and on the same network."
+      log "You can set MINIO_CONTAINER_IP manually in .env if needed."
       MINIO_CONTAINER_IP=""
     fi
   else
-    echo "Using manually configured MinIO container IP: $MINIO_CONTAINER_IP"
+    log "Using manually configured MinIO container IP: $MINIO_CONTAINER_IP"
   fi
 
   # HOST_PUBLIC_IP should be provided by start_container.sh
   if [ -z "$HOST_PUBLIC_IP" ]; then
-    echo "Error: HOST_PUBLIC_IP is not set. This should be detected automatically by start_container.sh"
-    echo "If auto-detection fails, you can set it manually in .env or as an environment variable"
+    log "Error: HOST_PUBLIC_IP is not set. This should be detected automatically by start_container.sh"
+    log "If auto-detection fails, you can set it manually in .env or as an environment variable"
     exit 1
   fi
 
@@ -76,7 +95,7 @@ if [ "$MODE" = "client" ] || [ "$MODE" = "CLIENT" ]; then
           wg pubkey < "$KEY_DIR/privatekey-client" > "$KEY_DIR/publickey-client"
       fi
   elif [ ! -f "$KEY_DIR/privatekey-client" ]; then
-      echo "No client keypair found, generating..."
+      log "No client keypair found, generating..."
       umask 077
       wg genkey | tee "$KEY_DIR/privatekey-client" | wg pubkey > "$KEY_DIR/publickey-client"
   fi
@@ -124,11 +143,11 @@ $( [ -n "${SERVER_PRESHARED_KEY}" ] && echo "PresharedKey = ${SERVER_PRESHARED_K
 Endpoint = ${CLIENT_ENDPOINT}:${CLIENT_PORT}
 AllowedIPs = ${ALLOWEDIPS}
 EOF
-  echo "Generated client wg0.conf from env"
+  log "Generated client wg0.conf from env"
 else
   # SERVER mode: generate template from env; support multiple peers with optional PSKs
   if [ -z "$INTERNAL_SUBNET" ]; then
-    echo "Missing required server env var: INTERNAL_SUBNET"
+    log "Missing required server env var: INTERNAL_SUBNET"
     exit 1
   fi
 
@@ -144,7 +163,7 @@ else
           wg pubkey < "$KEY_DIR/privatekey-server" > "$KEY_DIR/publickey-server"
       fi
   elif [ ! -f "$KEY_DIR/privatekey-server" ]; then
-      echo "No server keypair found, generating..."
+      log "No server keypair found, generating..."
       umask 077
       wg genkey | tee "$KEY_DIR/privatekey-server" | wg pubkey > "$KEY_DIR/publickey-server"
   fi
@@ -174,7 +193,7 @@ EOF
       break
     fi
     if [ -z "$ALLOWED_VALUE" ]; then
-      echo "Missing ${ALLOWED_VAR} for peer ${i}"
+      log "Missing ${ALLOWED_VAR} for peer ${i}"
       exit 1
     fi
 
@@ -200,14 +219,14 @@ EOF
       test_var="PEER${j}_PUBLIC_KEY"
       test_val=${!test_var}
       if [ -z "$test_val" ]; then
-        echo "Gap detected: ${test_var} is missing while higher peers exist (max index $max_idx)"
+        log "Gap detected: ${test_var} is missing while higher peers exist (max index $max_idx)"
         exit 1
       fi
       j=$((j+1))
     done
   fi
 
-  echo "Generated server template from env for ${generated} peers"
+  log "Generated server template from env for ${generated} peers"
 fi
 
 exec /init
