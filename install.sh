@@ -568,9 +568,25 @@ fi
 
 echo "Setting up MinIO configuration..."
 
+# Find the network that the MinIO container is connected to
+# Docker Compose may prefix the network name, so we need to detect it
+MINIO_NETWORK=$(docker inspect minio --format '{{range $net, $conf := .NetworkSettings.Networks}}{{$net}}{{end}}' 2>/dev/null | grep -i wireguard | head -n1)
+
+if [ -z "$MINIO_NETWORK" ]; then
+  # Fallback: try to get any network the container is on
+  MINIO_NETWORK=$(docker inspect minio --format '{{range $net, $conf := .NetworkSettings.Networks}}{{$net}}{{end}}' 2>/dev/null | head -n1)
+fi
+
+if [ -z "$MINIO_NETWORK" ]; then
+  echo "Error: Could not detect MinIO container network. Is the MinIO container running?"
+  exit 1
+fi
+
+echo "Using network: $MINIO_NETWORK"
+
 # Connect to MinIO container via Docker network (cleaner than --network host)
 MINIO_INTERNAL_ENDPOINT="http://minio:${MINIO_WEB_PORT}"
-docker run --rm --network wireguard-network \
+docker run --rm --network "${MINIO_NETWORK}" \
   --entrypoint /bin/sh \
   minio/mc:latest \
   -c "
