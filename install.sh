@@ -580,7 +580,7 @@ docker run --rm --network host \
     # Create and configure each bucket
     IFS=',' read -ra BUCKETS <<< '${MINIO_PUBLIC_BUCKETS}' && \
     for bucket in \"\${BUCKETS[@]}\"; do
-      bucket=\$(echo \$bucket | xargs)  # trim whitespace
+      bucket=\$(echo \"\$bucket\" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
       if [ -n \"\$bucket\" ]; then
         echo \"Creating bucket: \$bucket\" && \
         mc mb myminio/\$bucket --ignore-existing && \
