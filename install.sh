@@ -167,7 +167,7 @@ docker container prune -f || true
 docker volume prune -f || true
 
 echo "Removing all images..."
-docker images | awk '{print $3}' | grep -v IMAGE | xargs docker image rm || true
+sudo docker images | awk '{print $2}' | grep -v "ID" | grep -v "\->" | xargs sudo docker image rm || true
 EOF
 
 # create gen_psk.sh
