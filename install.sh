@@ -568,13 +568,13 @@ fi
 
 echo "Setting up MinIO configuration..."
 
-# Use MinIO client in a container to configure MinIO
-# Set up alias
-docker run --rm --network host \
+# Connect to MinIO container via Docker network (cleaner than --network host)
+MINIO_INTERNAL_ENDPOINT="http://minio:${MINIO_WEB_PORT}"
+docker run --rm --network wireguard-network \
   --entrypoint /bin/sh \
   minio/mc:latest \
   -c "
-    mc alias set myminio ${MINIO_ENDPOINT} ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD} && \
+    mc alias set myminio ${MINIO_INTERNAL_ENDPOINT} ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD} && \
     echo 'MinIO alias configured successfully' && \
 
     # Create and configure each bucket
