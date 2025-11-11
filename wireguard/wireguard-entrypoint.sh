@@ -27,16 +27,36 @@ if [ "$MODE" = "client" ] || [ "$MODE" = "CLIENT" ]; then
     echo "Auto-detected CONTAINER_GATEWAY: $CONTAINER_GATEWAY"
   fi
 
+  # Resolve MinIO container IP using Docker network DNS (containers share the same network)
+  # iptables requires an IP address, so we resolve the container name "minio" to its IP
   if [ -z "$MINIO_CONTAINER_IP" ]; then
-    MINIO_CONTAINER_IP=$(getent hosts minio 2>/dev/null | awk '{print $1}' | head -n1)
+    # Wait for MinIO container to be resolvable (with retries)
+    echo "Waiting for MinIO container to be available..."
+    max_attempts=30
+    attempt=0
+    MINIO_CONTAINER_IP=""
+    
+    while [ $attempt -lt $max_attempts ]; do
+      MINIO_CONTAINER_IP=$(getent hosts minio 2>/dev/null | awk '{print $1}' | head -n1)
+      if [ -n "$MINIO_CONTAINER_IP" ]; then
+        echo "Resolved MinIO container IP: $MINIO_CONTAINER_IP (from hostname 'minio')"
+        break
+      fi
+      attempt=$((attempt + 1))
+      if [ $attempt -lt $max_attempts ]; then
+        echo "Attempt $attempt/$max_attempts: MinIO not yet resolvable, waiting 2 seconds..."
+        sleep 2
+      fi
+    done
+    
     if [ -z "$MINIO_CONTAINER_IP" ]; then
-      echo "Warning: Could not resolve MinIO container IP from hostname 'minio'."
+      echo "Warning: Could not resolve MinIO container IP from hostname 'minio' after $max_attempts attempts."
       echo "MinIO DNAT rules will be skipped. Ensure MinIO container is running and on the same network."
       echo "You can set MINIO_CONTAINER_IP manually in .env if needed."
       MINIO_CONTAINER_IP=""
-    else
-      echo "Resolved MinIO container IP: $MINIO_CONTAINER_IP (from hostname 'minio')"
     fi
+  else
+    echo "Using manually configured MinIO container IP: $MINIO_CONTAINER_IP"
   fi
 
   # HOST_PUBLIC_IP should be provided by start_container.sh

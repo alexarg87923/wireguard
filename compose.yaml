@@ -55,6 +55,9 @@ services:
       - ./wireguard/keys:/config/server
     networks:
       - wireguard-network
+    depends_on:
+      minio:
+        condition: service_healthy
     entrypoint: ["/bin/bash"]
     command: ["/config/wireguard-entrypoint.sh"]
   minio:
@@ -75,6 +78,12 @@ services:
       - minio-data:/data
     networks:
       - wireguard-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${MINIO_WEB_PORT:-8080}/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     command: server /data
 
 networks:
