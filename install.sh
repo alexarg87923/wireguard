@@ -18,6 +18,7 @@ umask 077
 
 # create directories
 mkdir -p wireguard/config wireguard/keys
+mkdir -p bin
 
 # create start_container.sh
 cat > start_container.sh << 'EOF'
@@ -630,8 +631,242 @@ else
 fi
 EOF
 
+# create minio-upload.sh in bin directory
+cat > bin/minio-upload.sh << 'EOF'
+#!/bin/bash
+
+# Script to upload a file to a MinIO bucket from the host
+# Usage: minio-upload.sh <bucket> <local-file> [remote-path]
+# Example: minio-upload.sh public myfile.txt uploads/myfile.txt
+
+set -euo pipefail
+
+if [ $# -lt 2 ] || [ $# -gt 3 ]; then
+  echo "Usage: $0 <bucket> <local-file> [remote-path]" >&2
+  echo "  bucket:      MinIO bucket name" >&2
+  echo "  local-file:  Path to local file to upload" >&2
+  echo "  remote-path: Optional remote path in bucket (defaults to filename)" >&2
+  exit 1
+fi
+
+BUCKET="$1"
+LOCAL_FILE="$2"
+REMOTE_PATH="${3:-$(basename "$LOCAL_FILE")}"
+
+# Get the directory where this script is located (wireguard directory)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ENV_FILE="${SCRIPT_DIR}/.env"
+
+if [ ! -f "$ENV_FILE" ]; then
+  echo "Error: .env file not found at $ENV_FILE" >&2
+  exit 1
+fi
+
+# Load environment variables
+set -o allexport
+source "$ENV_FILE"
+set +o allexport
+
+# Set defaults
+MINIO_ROOT_USER="${MINIO_ROOT_USER:-admin}"
+MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-miniopassword}"
+MINIO_WEB_PORT="${MINIO_WEB_PORT:-8080}"
+MINIO_ENDPOINT="http://localhost:${MINIO_WEB_PORT}"
+
+# Check if MinIO container is running
+if ! docker ps --format '{{.Names}}' | grep -q "^minio$"; then
+  echo "Error: MinIO container is not running. Start it first with ./start_container.sh" >&2
+  exit 1
+fi
+
+# Check if local file exists
+if [ ! -f "$LOCAL_FILE" ]; then
+  echo "Error: Local file not found: $LOCAL_FILE" >&2
+  exit 1
+fi
+
+# Get absolute path of local file
+if [ "$(dirname "$LOCAL_FILE")" = "." ] || [ "$(dirname "$LOCAL_FILE")" = "" ]; then
+  # Just a filename, use current directory
+  LOCAL_FILE_ABS="$(pwd)/$(basename "$LOCAL_FILE")"
+else
+  # Has a directory component
+  LOCAL_FILE_ABS="$(cd "$(dirname "$LOCAL_FILE")" && pwd)/$(basename "$LOCAL_FILE")"
+fi
+
+# Find the network that the MinIO container is connected to
+MINIO_NETWORK=$(docker inspect minio --format '{{range $net, $conf := .NetworkSettings.Networks}}{{$net}}{{end}}' 2>/dev/null | grep -i wireguard | head -n1)
+
+if [ -z "$MINIO_NETWORK" ]; then
+  MINIO_NETWORK=$(docker inspect minio --format '{{range $net, $conf := .NetworkSettings.Networks}}{{$net}}{{end}}' 2>/dev/null | head -n1)
+fi
+
+if [ -z "$MINIO_NETWORK" ]; then
+  echo "Error: Could not detect MinIO container network" >&2
+  exit 1
+fi
+
+# Connect to MinIO container via Docker network
+MINIO_INTERNAL_ENDPOINT="http://minio:${MINIO_WEB_PORT}"
+
+echo "Uploading $LOCAL_FILE to bucket '$BUCKET' as '$REMOTE_PATH'..."
+
+docker run --rm --network "${MINIO_NETWORK}" \
+  -v "${LOCAL_FILE_ABS}:/tmp/upload_file" \
+  --entrypoint /bin/sh \
+  minio/mc:latest \
+  -c "
+    mc alias set myminio ${MINIO_INTERNAL_ENDPOINT} ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD} && \
+    mc cp /tmp/upload_file myminio/${BUCKET}/${REMOTE_PATH} && \
+    echo 'Upload successful!' && \
+    echo "File available at: ${MINIO_ENDPOINT}/${BUCKET}/${REMOTE_PATH}"
+  "
+
+if [ $? -eq 0 ]; then
+  echo ""
+  echo "Upload complete: ${MINIO_ENDPOINT}/${BUCKET}/${REMOTE_PATH}"
+else
+  echo ""
+  echo "Error: Upload failed" >&2
+  exit 1
+fi
+EOF
+
+# create minio-download.sh in bin directory
+cat > bin/minio-download.sh << 'EOF'
+#!/bin/bash
+
+# Script to download a file from a MinIO bucket to the host
+# Usage: minio-download.sh <bucket> <remote-path> [local-file]
+# Example: minio-download.sh public uploads/myfile.txt myfile.txt
+
+set -euo pipefail
+
+if [ $# -lt 2 ] || [ $# -gt 3 ]; then
+  echo "Usage: $0 <bucket> <remote-path> [local-file]" >&2
+  echo "  bucket:      MinIO bucket name" >&2
+  echo "  remote-path: Path to file in bucket" >&2
+  echo "  local-file:  Optional local destination path (defaults to filename)" >&2
+  exit 1
+fi
+
+BUCKET="$1"
+REMOTE_PATH="$2"
+LOCAL_FILE="${3:-$(basename "$REMOTE_PATH")}"
+
+# Get the directory where this script is located (wireguard directory)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ENV_FILE="${SCRIPT_DIR}/.env"
+
+if [ ! -f "$ENV_FILE" ]; then
+  echo "Error: .env file not found at $ENV_FILE" >&2
+  exit 1
+fi
+
+# Load environment variables
+set -o allexport
+source "$ENV_FILE"
+set +o allexport
+
+# Set defaults
+MINIO_ROOT_USER="${MINIO_ROOT_USER:-admin}"
+MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-miniopassword}"
+MINIO_WEB_PORT="${MINIO_WEB_PORT:-8080}"
+MINIO_ENDPOINT="http://localhost:${MINIO_WEB_PORT}"
+
+# Check if MinIO container is running
+if ! docker ps --format '{{.Names}}' | grep -q "^minio$"; then
+  echo "Error: MinIO container is not running. Start it first with ./start_container.sh" >&2
+  exit 1
+fi
+
+# Get absolute path of local file (create directory if needed)
+if [ "$(dirname "$LOCAL_FILE")" = "." ] || [ "$(dirname "$LOCAL_FILE")" = "" ]; then
+  # Just a filename, use current directory
+  LOCAL_FILE_ABS="$(pwd)/$(basename "$LOCAL_FILE")"
+else
+  # Has a directory component
+  LOCAL_DIR="$(cd "$(dirname "$LOCAL_FILE")" 2>/dev/null && pwd || pwd)"
+  LOCAL_FILE_ABS="${LOCAL_DIR}/$(basename "$LOCAL_FILE")"
+  # Create directory if it doesn't exist
+  mkdir -p "$(dirname "$LOCAL_FILE_ABS")"
+fi
+
+# Find the network that the MinIO container is connected to
+MINIO_NETWORK=$(docker inspect minio --format '{{range $net, $conf := .NetworkSettings.Networks}}{{$net}}{{end}}' 2>/dev/null | grep -i wireguard | head -n1)
+
+if [ -z "$MINIO_NETWORK" ]; then
+  MINIO_NETWORK=$(docker inspect minio --format '{{range $net, $conf := .NetworkSettings.Networks}}{{$net}}{{end}}' 2>/dev/null | head -n1)
+fi
+
+if [ -z "$MINIO_NETWORK" ]; then
+  echo "Error: Could not detect MinIO container network" >&2
+  exit 1
+fi
+
+# Connect to MinIO container via Docker network
+MINIO_INTERNAL_ENDPOINT="http://minio:${MINIO_WEB_PORT}"
+
+echo "Downloading from bucket '$BUCKET': '$REMOTE_PATH'..."
+echo "Saving to: $LOCAL_FILE_ABS"
+
+docker run --rm --network "${MINIO_NETWORK}" \
+  -v "$(dirname "$LOCAL_FILE_ABS"):/tmp/download_dir" \
+  --entrypoint /bin/sh \
+  minio/mc:latest \
+  -c "
+    mc alias set myminio ${MINIO_INTERNAL_ENDPOINT} ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD} && \
+    mc cp myminio/${BUCKET}/${REMOTE_PATH} /tmp/download_dir/$(basename "$LOCAL_FILE_ABS") && \
+    echo 'Download successful!'
+  "
+
+if [ $? -eq 0 ]; then
+  echo ""
+  echo "Download complete: $LOCAL_FILE_ABS"
+else
+  echo ""
+  echo "Error: Download failed" >&2
+  exit 1
+fi
+EOF
+
 # only need to add execute permission
 chmod +x start_container.sh stop_container.sh reset_container.sh gen_psk.sh gen_keys.sh setup_host_routing.sh remove_host_routing.sh setup_minio.sh
+chmod +x bin/minio-upload.sh bin/minio-download.sh
+
+# Add bin directory to PATH
+BIN_DIR="$(pwd)/bin"
+SHELL_RC=""
+
+# Detect shell and appropriate rc file
+if [ -n "${ZSH_VERSION:-}" ]; then
+  SHELL_RC="$HOME/.zshrc"
+elif [ -n "${BASH_VERSION:-}" ]; then
+  SHELL_RC="$HOME/.bashrc"
+else
+  # Try to detect from $SHELL
+  case "$SHELL" in
+    *zsh) SHELL_RC="$HOME/.zshrc" ;;
+    *) SHELL_RC="$HOME/.bashrc" ;;
+  esac
+fi
+
+# Add to PATH if not already present
+if [ -f "$SHELL_RC" ]; then
+  if ! grep -q "# WireGuard bin directory" "$SHELL_RC" 2>/dev/null; then
+    echo "" >> "$SHELL_RC"
+    echo "# WireGuard bin directory" >> "$SHELL_RC"
+    echo "export PATH=\"\$PATH:${BIN_DIR}\"" >> "$SHELL_RC"
+    echo "Added ${BIN_DIR} to PATH in $SHELL_RC"
+    echo "Run 'source $SHELL_RC' or restart your terminal to use the commands globally"
+  else
+    echo "PATH already configured in $SHELL_RC"
+  fi
+else
+  echo "Warning: Could not find shell rc file ($SHELL_RC)"
+  echo "Please manually add the following to your shell configuration:"
+  echo "  export PATH=\"\$PATH:${BIN_DIR}\""
+fi
 
 echo "Installation complete!"
 echo "Available commands:"
@@ -643,6 +878,10 @@ echo "  ./gen_keys.sh <role>           - Generate keypair for 'server' or 'clien
 echo "  sudo ./setup_host_routing.sh   - Set up host routing rules (client only, requires root)"
 echo "  sudo ./remove_host_routing.sh  - Remove host routing rules (requires root)"
 echo "  ./setup_minio.sh               - Set up MinIO buckets (client only, auto-run by start_container.sh)"
+echo ""
+echo "Global MinIO commands (after sourcing shell rc):"
+echo "  minio-upload.sh <bucket> <local-file> [remote-path]   - Upload file to MinIO bucket"
+echo "  minio-download.sh <bucket> <remote-path> [local-file] - Download file from MinIO bucket"
 
 # self distruct to remove attack vectors
 rm -- "$0"
