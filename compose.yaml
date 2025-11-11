@@ -53,6 +53,8 @@ services:
       - net.ipv4.conf.all.src_valid_mark=1
     volumes:
       - ./wireguard/keys:/config/server
+    networks:
+      - wireguard-network
     entrypoint: ["/bin/bash"]
     command: ["/config/wireguard-entrypoint.sh"]
   minio:
@@ -71,7 +73,13 @@ services:
       - ./.env
     volumes:
       - minio-data:/data
+    networks:
+      - wireguard-network
     command: server /data
+
+networks:
+  wireguard-network:
+    driver: bridge
 
 volumes:
   minio-data:

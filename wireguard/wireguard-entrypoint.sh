@@ -27,6 +27,18 @@ if [ "$MODE" = "client" ] || [ "$MODE" = "CLIENT" ]; then
     echo "Auto-detected CONTAINER_GATEWAY: $CONTAINER_GATEWAY"
   fi
 
+  if [ -z "$MINIO_CONTAINER_IP" ]; then
+    MINIO_CONTAINER_IP=$(getent hosts minio 2>/dev/null | awk '{print $1}' | head -n1)
+    if [ -z "$MINIO_CONTAINER_IP" ]; then
+      echo "Warning: Could not resolve MinIO container IP from hostname 'minio'."
+      echo "MinIO DNAT rules will be skipped. Ensure MinIO container is running and on the same network."
+      echo "You can set MINIO_CONTAINER_IP manually in .env if needed."
+      MINIO_CONTAINER_IP=""
+    else
+      echo "Resolved MinIO container IP: $MINIO_CONTAINER_IP (from hostname 'minio')"
+    fi
+  fi
+
   # HOST_PUBLIC_IP should be provided by start_container.sh
   if [ -z "$HOST_PUBLIC_IP" ]; then
     echo "Error: HOST_PUBLIC_IP is not set. This should be detected automatically by start_container.sh"
@@ -65,9 +77,13 @@ PostUp = ip route add 172.17.0.0/16 via ${CONTAINER_GATEWAY} dev eth0 table 5182
 PostUp = iptables -A FORWARD -j ACCEPT
 PostUp = iptables -t nat -A POSTROUTING -o %i -m mark --mark 0xca6c -j SNAT --to-source ${CLIENT_IP%%/*}
 PostUp = iptables -t nat -A PREROUTING -i %i -d ${CLIENT_IP%%/*} -p tcp --dport 22 -j DNAT --to-destination ${CONTAINER_GATEWAY}:22
-PostUp = iptables -t nat -A PREROUTING -i %i -d ${CLIENT_IP%%/*} -p tcp --dport 8080 -j DNAT --to-destination ${CONTAINER_GATEWAY}:8080
+PostUp = iptables -t nat -A PREROUTING -i %i -d ${CLIENT_IP%%/*} -p tcp --dport 3060 -j DNAT --to-destination ${CONTAINER_GATEWAY}:3060
+$( [ -n "${MINIO_CONTAINER_IP}" ] && echo "PostUp = iptables -t nat -A PREROUTING -i %i -d ${CLIENT_IP%%/*} -p tcp --dport ${MINIO_WEB_PORT:-8080} -j DNAT --to-destination ${MINIO_CONTAINER_IP}:${MINIO_WEB_PORT:-8080}" )
+$( [ -n "${MINIO_CONTAINER_IP}" ] && echo "PostUp = iptables -t nat -A PREROUTING -i %i -d ${CLIENT_IP%%/*} -p tcp --dport ${MINIO_CONSOLE_PORT:-4020} -j DNAT --to-destination ${MINIO_CONTAINER_IP}:${MINIO_CONSOLE_PORT:-4020}" )
 
-PostDown = iptables -t nat -D PREROUTING -i %i -d ${CLIENT_IP%%/*} -p tcp --dport 8080 -j DNAT --to-destination ${CONTAINER_GATEWAY}:8080
+$( [ -n "${MINIO_CONTAINER_IP}" ] && echo "PostDown = iptables -t nat -D PREROUTING -i %i -d ${CLIENT_IP%%/*} -p tcp --dport ${MINIO_CONSOLE_PORT:-4020} -j DNAT --to-destination ${MINIO_CONTAINER_IP}:${MINIO_CONSOLE_PORT:-4020}" )
+$( [ -n "${MINIO_CONTAINER_IP}" ] && echo "PostDown = iptables -t nat -D PREROUTING -i %i -d ${CLIENT_IP%%/*} -p tcp --dport ${MINIO_WEB_PORT:-8080} -j DNAT --to-destination ${MINIO_CONTAINER_IP}:${MINIO_WEB_PORT:-8080}" )
+PostDown = iptables -t nat -D PREROUTING -i %i -d ${CLIENT_IP%%/*} -p tcp --dport 3060 -j DNAT --to-destination ${CONTAINER_GATEWAY}:22
 PostDown = iptables -t nat -D PREROUTING -i %i -d ${CLIENT_IP%%/*} -p tcp --dport 22 -j DNAT --to-destination ${CONTAINER_GATEWAY}:22
 PostDown = iptables -t nat -D POSTROUTING -o %i -m mark --mark 0xca6c -j SNAT --to-source ${CLIENT_IP%%/*}
 PostDown = iptables -D FORWARD -j ACCEPT
