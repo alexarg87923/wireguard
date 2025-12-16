@@ -59,9 +59,28 @@ if [ "$PROFILE" = "client" ] && [ -z "$HOST_PUBLIC_IP" ]; then
   echo "Detected HOST_PUBLIC_IP: $HOST_PUBLIC_IP"
 fi
 
+# Check if Docker's iptables chains exist (required for network creation)
+if ! iptables -t nat -L DOCKER &>/dev/null; then
+  echo "Warning: Docker's iptables chains are not initialized."
+  echo "This may cause network creation to fail."
+  echo ""
+  echo "To fix this, try one of the following:"
+  echo "  1. Restart Docker daemon: sudo systemctl restart docker"
+  echo "  2. If using UFW, ensure Docker can manage iptables:"
+  echo "     Edit /etc/docker/daemon.json and add: {\"iptables\": true}"
+  echo "     Then restart Docker: sudo systemctl restart docker"
+  echo ""
+  echo "Attempting to continue anyway..."
+fi
+
 # Always use docker compose to ensure containers are managed by compose
 echo "Starting container..."
-docker compose --profile ${PROFILE} up -d
+if ! docker compose --profile ${PROFILE} up -d; then
+  echo ""
+  echo "Error: Failed to start containers. If you see iptables errors,"
+  echo "please restart Docker daemon: sudo systemctl restart docker"
+  exit 1
+fi
 
 # Wait for container to be running (especially important for host routing setup)
 CONTAINER_NAME="wireguard-${PROFILE}"
@@ -534,6 +553,12 @@ if [ -f "$ENV_FILE" ]; then
   set -o allexport
   source "$ENV_FILE"
   set +o allexport
+fi
+
+# Guard: Only run MinIO setup for client profile
+if [ "${PROFILE:-}" != "client" ]; then
+  echo "Error: MinIO setup is only available for client profile (current profile: ${PROFILE:-not set})"
+  exit 1
 fi
 
 # Set defaults if not specified
