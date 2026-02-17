@@ -10,6 +10,7 @@ rm ./gen_keys.sh
 rm ./setup_host_routing.sh
 rm ./remove_host_routing.sh
 rm ./setup_minio.sh
+rm ./install_service.sh
 
 echo "Installing WireGuard container management scripts..."
 
@@ -23,6 +24,14 @@ mkdir -p bin
 # create start_container.sh
 cat > start_container.sh << 'EOF'
 #!/bin/bash
+
+# Check if user has docker permissions
+if ! docker ps > /dev/null 2>&1; then
+  echo "Error: Current user does not have permission to use Docker" >&2
+  echo "Please ensure you can run 'docker ps' successfully" >&2
+  echo "You may need to add your user to the docker group: sudo usermod -aG docker $USER" >&2
+  exit 1
+fi
 
 ENV_FILE=./.env
 
@@ -108,7 +117,11 @@ fi
 # Do this AFTER container is running so we can detect its IP and network
 if [ "$PROFILE" = "client" ]; then
   echo "Detected client profile, removing emergency access rule if it exists..."
-  iptables -D INPUT -p tcp --dport 22 -s ${CLIENT_ENDPOINT} -j ACCEPT -m comment --comment "Emergency Access"
+  if [ "$EUID" -eq 0 ]; then
+    iptables -D INPUT -p tcp --dport 22 -s ${CLIENT_ENDPOINT} -j ACCEPT -m comment --comment "Emergency Access" 2>/dev/null || true
+  elif sudo -n true 2>/dev/null; then
+    sudo iptables -D INPUT -p tcp --dport 22 -s ${CLIENT_ENDPOINT} -j ACCEPT -m comment --comment "Emergency Access" 2>/dev/null || true
+  fi
 
   if [ -f "./setup_host_routing.sh" ]; then
     echo "Invoking setup_host_routing.sh..."
@@ -131,6 +144,14 @@ EOF
 cat > stop_container.sh << 'EOF'
 #!/bin/bash
 
+# Check if user has docker permissions
+if ! docker ps > /dev/null 2>&1; then
+  echo "Error: Current user does not have permission to use Docker" >&2
+  echo "Please ensure you can run 'docker ps' successfully" >&2
+  echo "You may need to add your user to the docker group: sudo usermod -aG docker $USER" >&2
+  exit 1
+fi
+
 ENV_FILE=./.env
 
 # Load .env to check PROFILE if available
@@ -142,7 +163,13 @@ fi
 
 if [ "${PROFILE:-}" = "client" ]; then
   echo "Detected client profile, adding emergency access rule..."
-  iptables -A INPUT -p tcp --dport 22 -s ${CLIENT_ENDPOINT} -j ACCEPT -m comment --comment "Emergency Access"
+  if [ "$EUID" -eq 0 ]; then
+    iptables -A INPUT -p tcp --dport 22 -s ${CLIENT_ENDPOINT} -j ACCEPT -m comment --comment "Emergency Access" 2>/dev/null || true
+  elif sudo -n true 2>/dev/null; then
+    sudo iptables -A INPUT -p tcp --dport 22 -s ${CLIENT_ENDPOINT} -j ACCEPT -m comment --comment "Emergency Access" 2>/dev/null || true
+  else
+    echo "Warning: Cannot add emergency access rule (requires root/sudo)" >&2
+  fi
 
   if [ -f "./remove_host_routing.sh" ]; then
     echo "Invoking remove_host_routing.sh..."
@@ -174,6 +201,22 @@ EOF
 # create reset_container.sh
 cat > reset_container.sh << 'EOF'
 #!/bin/bash
+
+# Check if user has docker permissions (either directly or via sudo)
+# First try without sudo, then with sudo
+DOCKER_CMD="docker"
+if ! docker ps > /dev/null 2>&1; then
+  # If direct docker doesn't work, check if sudo docker works
+  if sudo docker ps > /dev/null 2>&1; then
+    DOCKER_CMD="sudo docker"
+  else
+    echo "Error: Current user does not have permission to use Docker" >&2
+    echo "Please ensure you can run 'docker ps' or 'sudo docker ps' successfully" >&2
+    echo "You may need to add your user to the docker group: sudo usermod -aG docker $USER" >&2
+    exit 1
+  fi
+fi
+
 echo "Resetting container..."
 
 echo "Checking if stop_container.sh exists..."
@@ -183,11 +226,11 @@ if [ -f "./stop_container.sh" ]; then
 fi
 
 echo "Pruning containers and volumes..."
-docker container prune -f || true
-docker volume prune -f || true
+${DOCKER_CMD} container prune -f || true
+${DOCKER_CMD} volume prune -f || true
 
 echo "Removing all images..."
-sudo docker images | awk '{print $2}' | grep -v "ID" | grep -v "\->" | xargs sudo docker image rm || true
+${DOCKER_CMD} images | awk '{print $2}' | grep -v "ID" | grep -v "\->" | xargs ${DOCKER_CMD} image rm || true
 EOF
 
 # create gen_psk.sh
@@ -855,8 +898,121 @@ else
 fi
 EOF
 
+# create install_service.sh
+cat > install_service.sh << 'EOF'
+#!/bin/bash
+
+# Script to install WireGuard VPN as a systemd service
+# This creates a systemd service file that manages the WireGuard containers
+
+set -euo pipefail
+
+# Check if running as root
+if [ "$EUID" -ne 0 ]; then 
+  echo "Error: This script must be run as root (use sudo)" >&2
+  exit 1
+fi
+
+# Check if user has docker permissions
+if ! docker ps > /dev/null 2>&1; then
+  echo "Error: Current user does not have permission to use Docker" >&2
+  echo "Please ensure you can run 'docker ps' successfully" >&2
+  echo "You may need to add your user to the docker group: sudo usermod -aG docker $USER" >&2
+  exit 1
+fi
+
+# Get the project directory (where this script is located)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Check if required files exist
+if [ ! -f "${SCRIPT_DIR}/start_container.sh" ]; then
+  echo "Error: start_container.sh not found in ${SCRIPT_DIR}" >&2
+  exit 1
+fi
+
+if [ ! -f "${SCRIPT_DIR}/stop_container.sh" ]; then
+  echo "Error: stop_container.sh not found in ${SCRIPT_DIR}" >&2
+  exit 1
+fi
+
+if [ ! -f "${SCRIPT_DIR}/reset_container.sh" ]; then
+  echo "Error: reset_container.sh not found in ${SCRIPT_DIR}" >&2
+  exit 1
+fi
+
+if [ ! -f "${SCRIPT_DIR}/compose.yaml" ]; then
+  echo "Error: compose.yaml not found in ${SCRIPT_DIR}" >&2
+  exit 1
+fi
+
+if [ ! -f "${SCRIPT_DIR}/.env" ]; then
+  echo "Warning: .env file not found in ${SCRIPT_DIR}" >&2
+  echo "The service will still be installed, but environment variables won't be loaded." >&2
+  echo "Create .env file (e.g. copy .env.EXAMPLE) before starting the service." >&2
+fi
+
+echo "Installing WireGuard VPN systemd service..."
+echo "Project directory: ${SCRIPT_DIR}"
+
+# Create systemd service file
+SERVICE_FILE="/etc/systemd/system/wireguard-vpn.service"
+
+cat > "${SERVICE_FILE}" << SERVICE_EOF
+[Unit]
+Description=WireGuard VPN Service
+Documentation=https://github.com/wireguard/wireguard
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=${SCRIPT_DIR}
+EnvironmentFile=-${SCRIPT_DIR}/.env
+ExecStart=${SCRIPT_DIR}/start_container.sh
+ExecStop=${SCRIPT_DIR}/stop_container.sh
+ExecReload=/bin/bash -c '${SCRIPT_DIR}/stop_container.sh && ${SCRIPT_DIR}/start_container.sh'
+
+# Environment
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# Restart policy
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+SERVICE_EOF
+
+echo "Service file created: ${SERVICE_FILE}"
+
+# Reload systemd daemon
+systemctl daemon-reload
+
+echo ""
+echo "Service installed successfully!"
+echo ""
+echo "To start the service:"
+echo "  sudo systemctl start wireguard-vpn"
+echo ""
+echo "To stop the service:"
+echo "  sudo systemctl stop wireguard-vpn"
+echo ""
+echo "To enable the service (start on boot):"
+echo "  sudo systemctl enable wireguard-vpn"
+echo ""
+echo "To check service status:"
+echo "  sudo systemctl status wireguard-vpn"
+echo ""
+echo "To reset containers (stop, prune, remove images):"
+echo "  ${SCRIPT_DIR}/reset_container.sh"
+echo ""
+echo "Note: The reset command is not integrated into systemd as it's destructive."
+echo "      Run it manually when needed."
+EOF
+
 # only need to add execute permission
-chmod +x start_container.sh stop_container.sh reset_container.sh gen_psk.sh gen_keys.sh setup_host_routing.sh remove_host_routing.sh setup_minio.sh
+chmod +x start_container.sh stop_container.sh reset_container.sh gen_psk.sh gen_keys.sh setup_host_routing.sh remove_host_routing.sh setup_minio.sh install_service.sh
 chmod +x bin/minio-upload.sh bin/minio-download.sh
 
 # Add bin directory to PATH
@@ -903,6 +1059,7 @@ echo "  ./gen_keys.sh <role>           - Generate keypair for 'server' or 'clien
 echo "  sudo ./setup_host_routing.sh   - Set up host routing rules (client only, requires root)"
 echo "  sudo ./remove_host_routing.sh  - Remove host routing rules (requires root)"
 echo "  ./setup_minio.sh               - Set up MinIO buckets (client only, auto-run by start_container.sh)"
+echo "  sudo ./install_service.sh      - Install WireGuard as a systemd service"
 echo ""
 echo "Global MinIO commands (after sourcing shell rc):"
 echo "  minio-upload.sh <bucket> <local-file> [remote-path]   - Upload file to MinIO bucket"
