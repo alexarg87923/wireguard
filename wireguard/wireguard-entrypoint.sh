@@ -254,8 +254,8 @@ EOF
   fi
 
   log "Generated server template from env for ${generated} peers"
-  # linuxserver only regenerates wg0.conf from the template when the live file is missing
-  rm -f "$CONFIG_DIR/wg0.conf"
+  mkdir -p "$CONFIG_DIR"
+  cp "$TEMPLATE_DIR/server.conf" "$CONFIG_DIR/wg0.conf"
 fi
 
 exec /init
