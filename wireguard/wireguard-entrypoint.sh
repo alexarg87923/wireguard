@@ -200,8 +200,10 @@ Address = ${INTERNAL_SUBNET}
 ListenPort = ${SERVER_PORT_VALUE}
 PrivateKey = $(cat ${KEY_DIR}/privatekey-server)
 PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -A FORWARD -o %i -j ACCEPT; iptables -t nat -A POSTROUTING -o eth+ -j MASQUERADE
+PostUp = iptables -t nat -A POSTROUTING -o %i ! -s 10.0.2.0/24 -j SNAT --to-source ${INTERNAL_SUBNET%%/*}
 ${VPN_SSH_DNAT_UP}
 ${VPN_SSH_DNAT_DOWN}
+PostDown = iptables -t nat -D POSTROUTING -o %i ! -s 10.0.2.0/24 -j SNAT --to-source ${INTERNAL_SUBNET%%/*}
 PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -D FORWARD -o %i -j ACCEPT; iptables -t nat -D POSTROUTING -o eth+ -j MASQUERADE
 EOF
 
