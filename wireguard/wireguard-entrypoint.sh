@@ -173,6 +173,26 @@ else
       wg genkey | tee "$KEY_DIR/privatekey-server" | wg pubkey > "$KEY_DIR/publickey-server"
   fi
 
+  VPN_SSH_DNAT_UP=""
+  VPN_SSH_DNAT_DOWN=""
+  if [ "${ENABLE_VPN_SSH:-true}" != "false" ] && [ "${ENABLE_VPN_SSH:-true}" != "0" ]; then
+    if [ -z "$CONTAINER_GATEWAY" ]; then
+      CONTAINER_GATEWAY=$(ip route show default 2>/dev/null | awk '/default/ {print $3}' | head -n1)
+      if [ -z "$CONTAINER_GATEWAY" ]; then
+        CONTAINER_GATEWAY=$(ip -4 addr show eth0 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d'/' -f1 | sed 's/\.[0-9]*$/.1/')
+      fi
+      if [ -z "$CONTAINER_GATEWAY" ]; then
+        log "Warning: Could not auto-detect CONTAINER_GATEWAY. Please set it manually."
+        exit 1
+      fi
+      log "Auto-detected CONTAINER_GATEWAY: $CONTAINER_GATEWAY"
+    fi
+    VPN_SSH_DNAT_UP="PostUp = iptables -t nat -A PREROUTING -i %i -d ${INTERNAL_SUBNET%%/*} -p tcp --dport ${SSH_PORT:-22} -j DNAT --to-destination ${CONTAINER_GATEWAY}:${SSH_PORT:-22}"
+    VPN_SSH_DNAT_DOWN="PostDown = iptables -t nat -D PREROUTING -i %i -d ${INTERNAL_SUBNET%%/*} -p tcp --dport ${SSH_PORT:-22} -j DNAT --to-destination ${CONTAINER_GATEWAY}:${SSH_PORT:-22}"
+  else
+    log "VPN host SSH disabled (ENABLE_VPN_SSH=false), skipping DNAT"
+  fi
+
   mkdir -p "$TEMPLATE_DIR"
   cat > "$TEMPLATE_DIR/server.conf" <<EOF
 [Interface]
@@ -180,6 +200,8 @@ Address = ${INTERNAL_SUBNET}
 ListenPort = ${SERVER_PORT_VALUE}
 PrivateKey = $(cat ${KEY_DIR}/privatekey-server)
 PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -A FORWARD -o %i -j ACCEPT; iptables -t nat -A POSTROUTING -o eth+ -j MASQUERADE
+${VPN_SSH_DNAT_UP}
+${VPN_SSH_DNAT_DOWN}
 PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -D FORWARD -o %i -j ACCEPT; iptables -t nat -D POSTROUTING -o eth+ -j MASQUERADE
 EOF
 

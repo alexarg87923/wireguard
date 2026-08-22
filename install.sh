@@ -126,16 +126,19 @@ if [ $attempt -eq $max_attempts ]; then
   echo "Warning: Container ${CONTAINER_NAME} may not be fully ready yet"
 fi
 
-# Setup host routing rules for client profile (requires root/sudo)
-# Do this AFTER container is running so we can detect its IP and network
-if [ "$PROFILE" = "client" ]; then
-  echo "Detected client profile, removing emergency access rule if it exists..."
+# Host routing / emergency access (optional via .env flags)
+if [ "$PROFILE" = "client" ] && [ "${ENABLE_EMERGENCY_ACCESS:-true}" != "false" ] && [ "${ENABLE_EMERGENCY_ACCESS:-true}" != "0" ]; then
+  echo "Removing emergency access rule if it exists..."
   if [ "$EUID" -eq 0 ]; then
     iptables -D INPUT -p tcp --dport 22 -s ${CLIENT_ENDPOINT} -j ACCEPT -m comment --comment "Emergency Access" 2>/dev/null || true
   elif sudo -n true 2>/dev/null; then
     sudo iptables -D INPUT -p tcp --dport 22 -s ${CLIENT_ENDPOINT} -j ACCEPT -m comment --comment "Emergency Access" 2>/dev/null || true
   fi
+fi
 
+# Client always gets host routing (SSH to this box via its VPN IP).
+# Server host routing is only for SSH to 10.0.2.1 when ENABLE_VPN_SSH is on.
+if [ "$PROFILE" = "client" ] || { [ "$PROFILE" = "server" ] && [ "${ENABLE_VPN_SSH:-true}" != "false" ] && [ "${ENABLE_VPN_SSH:-true}" != "0" ]; }; then
   if [ -f "./setup_host_routing.sh" ]; then
     echo "Invoking setup_host_routing.sh..."
     if [ "$EUID" -ne 0 ]; then
@@ -145,14 +148,15 @@ if [ "$PROFILE" = "client" ]; then
     fi
   fi
 
-  # Setup MinIO buckets automatically (when enabled)
-  if [ "${ENABLE_MINIO:-true}" != "false" ] && [ "${ENABLE_MINIO:-true}" != "0" ]; then
-    if [ -f "./setup_minio.sh" ]; then
-      echo "Setting up MinIO buckets..."
-      ./setup_minio.sh
+  if [ "$PROFILE" = "client" ]; then
+    if [ "${ENABLE_MINIO:-true}" != "false" ] && [ "${ENABLE_MINIO:-true}" != "0" ]; then
+      if [ -f "./setup_minio.sh" ]; then
+        echo "Setting up MinIO buckets..."
+        ./setup_minio.sh
+      fi
+    else
+      echo "MinIO disabled (ENABLE_MINIO=false), skipping bucket setup"
     fi
-  else
-    echo "MinIO disabled (ENABLE_MINIO=false), skipping bucket setup"
   fi
 fi
 EOF
@@ -178,8 +182,8 @@ if [ -f "$ENV_FILE" ]; then
   set +o allexport
 fi
 
-if [ "${PROFILE:-}" = "client" ]; then
-  echo "Detected client profile, adding emergency access rule..."
+if [ "${PROFILE:-}" = "client" ] && [ "${ENABLE_EMERGENCY_ACCESS:-true}" != "false" ] && [ "${ENABLE_EMERGENCY_ACCESS:-true}" != "0" ]; then
+  echo "Adding emergency access rule..."
   if [ "$EUID" -eq 0 ]; then
     iptables -A INPUT -p tcp --dport 22 -s ${CLIENT_ENDPOINT} -j ACCEPT -m comment --comment "Emergency Access" 2>/dev/null || true
   elif sudo -n true 2>/dev/null; then
@@ -187,7 +191,9 @@ if [ "${PROFILE:-}" = "client" ]; then
   else
     echo "Warning: Cannot add emergency access rule (requires root/sudo)" >&2
   fi
+fi
 
+if [ "${PROFILE:-}" = "client" ] || { [ "${PROFILE:-}" = "server" ] && [ "${ENABLE_VPN_SSH:-true}" != "false" ] && [ "${ENABLE_VPN_SSH:-true}" != "0" ]; }; then
   if [ -f "./remove_host_routing.sh" ]; then
     echo "Invoking remove_host_routing.sh..."
     if [ "$EUID" -ne 0 ]; then
@@ -382,7 +388,6 @@ cat > setup_host_routing.sh << 'EOF'
 #!/bin/bash
 
 # Script to set up iptables rules on host to route traffic through WireGuard container
-# This is only needed for client profile
 
 set -euo pipefail
 
@@ -400,12 +405,17 @@ if [ -f "$ENV_FILE" ]; then
   set +o allexport
 fi
 
-if [ "$PROFILE" != "client" ]; then
-  echo "Error: Host routing is only needed for client profile. Current PROFILE: ${PROFILE:-not set}"
+if [ "$PROFILE" != "client" ] && [ "$PROFILE" != "server" ]; then
+  echo "Error: Host routing is only for client or server. Current PROFILE: ${PROFILE:-not set}"
   exit 1
 fi
 
-CONTAINER_NAME="wireguard-client"
+if [ "$PROFILE" = "server" ] && { [ "${ENABLE_VPN_SSH:-true}" = "false" ] || [ "${ENABLE_VPN_SSH:-true}" = "0" ]; }; then
+  echo "ENABLE_VPN_SSH=false, skipping host routing"
+  exit 0
+fi
+
+CONTAINER_NAME="wireguard-${PROFILE}"
 
 # Check if container is running
 if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
@@ -486,12 +496,15 @@ ip route add 10.0.2.0/24 via "$CONTAINER_IP" 2>/dev/null || \
 
 # 4. Add UFW rules for VPN access
 echo "Adding iptables rules..."
-iptables -A INPUT -s ${CLIENT_SUBNET} -p tcp --dport ${SSH_PORT:-22} -j ACCEPT -m comment --comment "SSH"
-if [ "${ENABLE_MINIO:-true}" != "false" ] && [ "${ENABLE_MINIO:-true}" != "0" ]; then
-  iptables -A INPUT -s ${CLIENT_SUBNET} -p tcp --dport ${MINIO_WEB_PORT:-8080} -j ACCEPT -m comment --comment "MinIO-Web"
-  iptables -A INPUT -s ${CLIENT_SUBNET} -p tcp --dport ${MINIO_CONSOLE_PORT:-4020} -j ACCEPT -m comment --comment "MinIO-Console"
+VPN_SUBNET="${CLIENT_SUBNET:-10.0.2.0/24}"
+iptables -A INPUT -s ${VPN_SUBNET} -p tcp --dport ${SSH_PORT:-22} -j ACCEPT -m comment --comment "SSH"
+if [ "$PROFILE" = "client" ]; then
+  if [ "${ENABLE_MINIO:-true}" != "false" ] && [ "${ENABLE_MINIO:-true}" != "0" ]; then
+    iptables -A INPUT -s ${VPN_SUBNET} -p tcp --dport ${MINIO_WEB_PORT:-8080} -j ACCEPT -m comment --comment "MinIO-Web"
+    iptables -A INPUT -s ${VPN_SUBNET} -p tcp --dport ${MINIO_CONSOLE_PORT:-4020} -j ACCEPT -m comment --comment "MinIO-Console"
+  fi
+  iptables -A INPUT -s ${VPN_SUBNET} -p tcp --dport ${BACKEND_PORT:-3060} -j ACCEPT -m comment --comment "Backend"
 fi
-iptables -A INPUT -s ${CLIENT_SUBNET} -p tcp --dport ${BACKEND_PORT:-3060} -j ACCEPT -m comment --comment "Backend"
 
 echo "Host routing rules configured successfully!"
 echo ""
