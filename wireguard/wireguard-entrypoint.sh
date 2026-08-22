@@ -253,7 +253,9 @@ EOF
     done
   fi
 
-  log "Generated server template from env for ${generated} peers"
+  mkdir -p "$CONFIG_DIR"
+  cp "$TEMPLATE_DIR/server.conf" "$CONFIG_DIR/wg0.conf"
+  log "Generated server wg0.conf from env for ${generated} peers"
 fi
 
 exec /init
