@@ -150,7 +150,7 @@ AllowedIPs = ${ALLOWEDIPS}
 EOF
   log "Generated client wg0.conf from env"
 else
-  # SERVER mode: generate template from env; support multiple peers with optional PSKs
+  # SERVER mode: write templates/server.conf; /init generates wg0.conf from it
   if [ -z "$INTERNAL_SUBNET" ]; then
     log "Missing required server env var: INTERNAL_SUBNET"
     exit 1
@@ -253,9 +253,9 @@ EOF
     done
   fi
 
-  mkdir -p "$CONFIG_DIR"
-  cp "$TEMPLATE_DIR/server.conf" "$CONFIG_DIR/wg0.conf"
-  log "Generated server wg0.conf from env for ${generated} peers"
+  log "Generated server template from env for ${generated} peers"
+  # linuxserver only regenerates wg0.conf from the template when the live file is missing
+  rm -f "$CONFIG_DIR/wg0.conf"
 fi
 
 exec /init
