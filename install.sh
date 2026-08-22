@@ -132,10 +132,14 @@ if [ "$PROFILE" = "client" ]; then
     fi
   fi
 
-  # Setup MinIO buckets automatically
-  if [ -f "./setup_minio.sh" ]; then
-    echo "Setting up MinIO buckets..."
-    ./setup_minio.sh
+  # Setup MinIO buckets automatically (when enabled)
+  if [ "${ENABLE_MINIO:-true}" != "false" ] && [ "${ENABLE_MINIO:-true}" != "0" ]; then
+    if [ -f "./setup_minio.sh" ]; then
+      echo "Setting up MinIO buckets..."
+      ./setup_minio.sh
+    fi
+  else
+    echo "MinIO disabled (ENABLE_MINIO=false), skipping bucket setup"
   fi
 fi
 EOF
@@ -462,8 +466,10 @@ ip route add 10.0.2.0/24 via "$CONTAINER_IP" 2>/dev/null || \
 # 4. Add UFW rules for VPN access
 echo "Adding iptables rules..."
 iptables -A INPUT -s ${CLIENT_SUBNET} -p tcp --dport ${SSH_PORT:-22} -j ACCEPT -m comment --comment "SSH"
-iptables -A INPUT -s ${CLIENT_SUBNET} -p tcp --dport ${MINIO_WEB_PORT:-8080} -j ACCEPT -m comment --comment "MinIO-Web"
-iptables -A INPUT -s ${CLIENT_SUBNET} -p tcp --dport ${MINIO_CONSOLE_PORT:-4020} -j ACCEPT -m comment --comment "MinIO-Console"
+if [ "${ENABLE_MINIO:-true}" != "false" ] && [ "${ENABLE_MINIO:-true}" != "0" ]; then
+  iptables -A INPUT -s ${CLIENT_SUBNET} -p tcp --dport ${MINIO_WEB_PORT:-8080} -j ACCEPT -m comment --comment "MinIO-Web"
+  iptables -A INPUT -s ${CLIENT_SUBNET} -p tcp --dport ${MINIO_CONSOLE_PORT:-4020} -j ACCEPT -m comment --comment "MinIO-Console"
+fi
 iptables -A INPUT -s ${CLIENT_SUBNET} -p tcp --dport ${BACKEND_PORT:-3060} -j ACCEPT -m comment --comment "Backend"
 
 echo "Host routing rules configured successfully!"
@@ -554,11 +560,13 @@ if [ -n "${CLIENT_SUBNET:-}" ]; then
   # Remove SSH rule (use port from env or default)
   iptables -D INPUT -s "${CLIENT_SUBNET}" -p tcp --dport ${SSH_PORT:-22} -j ACCEPT -m comment --comment "SSH" 2>/dev/null || true
 
-  # Remove MinIO Web rule (use port from env or default)
-  iptables -D INPUT -s "${CLIENT_SUBNET}" -p tcp --dport ${MINIO_WEB_PORT:-8080} -j ACCEPT -m comment --comment "MinIO-Web" 2>/dev/null || true
+  if [ "${ENABLE_MINIO:-true}" != "false" ] && [ "${ENABLE_MINIO:-true}" != "0" ]; then
+    # Remove MinIO Web rule (use port from env or default)
+    iptables -D INPUT -s "${CLIENT_SUBNET}" -p tcp --dport ${MINIO_WEB_PORT:-8080} -j ACCEPT -m comment --comment "MinIO-Web" 2>/dev/null || true
 
-  # Remove MinIO Console rule (use port from env or default)
-  iptables -D INPUT -s "${CLIENT_SUBNET}" -p tcp --dport ${MINIO_CONSOLE_PORT:-4020} -j ACCEPT -m comment --comment "MinIO-Console" 2>/dev/null || true
+    # Remove MinIO Console rule (use port from env or default)
+    iptables -D INPUT -s "${CLIENT_SUBNET}" -p tcp --dport ${MINIO_CONSOLE_PORT:-4020} -j ACCEPT -m comment --comment "MinIO-Console" 2>/dev/null || true
+  fi
 
   # Remove Backend rule (use port from env or default)
   iptables -D INPUT -s "${CLIENT_SUBNET}" -p tcp --dport ${BACKEND_PORT:-3060} -j ACCEPT -m comment --comment "Backend" 2>/dev/null || true
@@ -566,7 +574,11 @@ fi
 
 # Fallback: Remove rules by finding them via comment using iptables -S
 # This handles cases where CLIENT_SUBNET is not available or rules don't match exactly
-for comment in "SSH" "MinIO-Web" "MinIO-Console" "Backend"; do
+MINIO_COMMENTS=""
+if [ "${ENABLE_MINIO:-true}" != "false" ] && [ "${ENABLE_MINIO:-true}" != "0" ]; then
+  MINIO_COMMENTS="MinIO-Web MinIO-Console"
+fi
+for comment in "SSH" ${MINIO_COMMENTS} "Backend"; do
   # Use iptables -S to find rules with matching comments and delete them
   # iptables -S outputs rules in a format that can be converted to delete commands
   iptables -S INPUT 2>/dev/null | grep -- "--comment \"${comment}\"" | while read rule; do
@@ -602,6 +614,11 @@ fi
 if [ "${PROFILE:-}" != "client" ]; then
   echo "Error: MinIO setup is only available for client profile (current profile: ${PROFILE:-not set})"
   exit 1
+fi
+
+if [ "${ENABLE_MINIO:-true}" = "false" ] || [ "${ENABLE_MINIO:-true}" = "0" ]; then
+  echo "MinIO disabled (ENABLE_MINIO=false), skipping setup"
+  exit 0
 fi
 
 # Set defaults if not specified
@@ -735,6 +752,11 @@ set -o allexport
 source "$ENV_FILE"
 set +o allexport
 
+if [ "${ENABLE_MINIO:-true}" = "false" ] || [ "${ENABLE_MINIO:-true}" = "0" ]; then
+  echo "Error: MinIO is disabled (ENABLE_MINIO=false)" >&2
+  exit 1
+fi
+
 # Set defaults
 MINIO_ROOT_USER="${MINIO_ROOT_USER:-admin}"
 MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-miniopassword}"
@@ -835,6 +857,11 @@ fi
 set -o allexport
 source "$ENV_FILE"
 set +o allexport
+
+if [ "${ENABLE_MINIO:-true}" = "false" ] || [ "${ENABLE_MINIO:-true}" = "0" ]; then
+  echo "Error: MinIO is disabled (ENABLE_MINIO=false)" >&2
+  exit 1
+fi
 
 # Set defaults
 MINIO_ROOT_USER="${MINIO_ROOT_USER:-admin}"
