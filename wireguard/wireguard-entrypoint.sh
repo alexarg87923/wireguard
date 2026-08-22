@@ -106,23 +106,6 @@ if [ "$MODE" = "client" ] || [ "$MODE" = "CLIENT" ]; then
   fi
 
   mkdir -p "$CONFIG_DIR"
-
-  # Loaded by PostUp. A file avoids wg-quick eval breaking nft braces/quotes.
-  # Do not flush the whole ruleset — that would wipe wg-quick's tables.
-  {
-    echo "table ip wireguard-dnat {"
-    echo "  chain prerouting {"
-    echo "    type nat hook prerouting priority -150; policy accept;"
-    echo "    iifname \"wg0\" ip daddr ${CLIENT_IP%%/*} tcp dport ${SSH_PORT:-22} dnat to ${CONTAINER_GATEWAY}:${SSH_PORT:-22}"
-    echo "    iifname \"wg0\" ip daddr ${CLIENT_IP%%/*} tcp dport ${BACKEND_PORT:-3060} dnat to ${CONTAINER_GATEWAY}:${BACKEND_PORT:-3060}"
-    if [ -n "${MINIO_CONTAINER_IP}" ]; then
-      echo "    iifname \"wg0\" ip daddr ${CLIENT_IP%%/*} tcp dport ${MINIO_WEB_PORT:-8080} dnat to ${MINIO_CONTAINER_IP}:${MINIO_WEB_PORT:-8080}"
-      echo "    iifname \"wg0\" ip daddr ${CLIENT_IP%%/*} tcp dport ${MINIO_CONSOLE_PORT:-4020} dnat to ${MINIO_CONTAINER_IP}:${MINIO_CONSOLE_PORT:-4020}"
-    fi
-    echo "  }"
-    echo "}"
-  } > "$CONFIG_DIR/wireguard-dnat.nft"
-
   cat > "$CONFIG_DIR/wg0.conf" <<EOF
 [Interface]
 Address = ${CLIENT_IP}
@@ -141,14 +124,11 @@ PostUp = iptables -t nat -A PREROUTING -i %i -d ${CLIENT_IP%%/*} -p tcp --dport 
 PostUp = iptables -t nat -A PREROUTING -i %i -d ${CLIENT_IP%%/*} -p tcp --dport ${BACKEND_PORT:-3060} -j DNAT --to-destination ${CONTAINER_GATEWAY}:${BACKEND_PORT:-3060}
 $( [ -n "${MINIO_CONTAINER_IP}" ] && echo "PostUp = iptables -t nat -A PREROUTING -i %i -d ${CLIENT_IP%%/*} -p tcp --dport ${MINIO_WEB_PORT:-8080} -j DNAT --to-destination ${MINIO_CONTAINER_IP}:${MINIO_WEB_PORT:-8080}" )
 $( [ -n "${MINIO_CONTAINER_IP}" ] && echo "PostUp = iptables -t nat -A PREROUTING -i %i -d ${CLIENT_IP%%/*} -p tcp --dport ${MINIO_CONSOLE_PORT:-4020} -j DNAT --to-destination ${MINIO_CONTAINER_IP}:${MINIO_CONSOLE_PORT:-4020}" )
-PostUp = nft delete table ip wireguard-dnat >/dev/null 2>&1 || true
-PostUp = nft -f /config/wg_confs/wireguard-dnat.nft
 
 $( [ -n "${MINIO_CONTAINER_IP}" ] && echo "PostDown = iptables -t nat -D PREROUTING -i %i -d ${CLIENT_IP%%/*} -p tcp --dport ${MINIO_CONSOLE_PORT:-4020} -j DNAT --to-destination ${MINIO_CONTAINER_IP}:${MINIO_CONSOLE_PORT:-4020}" )
 $( [ -n "${MINIO_CONTAINER_IP}" ] && echo "PostDown = iptables -t nat -D PREROUTING -i %i -d ${CLIENT_IP%%/*} -p tcp --dport ${MINIO_WEB_PORT:-8080} -j DNAT --to-destination ${MINIO_CONTAINER_IP}:${MINIO_WEB_PORT:-8080}" )
 PostDown = iptables -t nat -D PREROUTING -i %i -d ${CLIENT_IP%%/*} -p tcp --dport ${BACKEND_PORT:-3060} -j DNAT --to-destination ${CONTAINER_GATEWAY}:${BACKEND_PORT:-3060}
 PostDown = iptables -t nat -D PREROUTING -i %i -d ${CLIENT_IP%%/*} -p tcp --dport ${SSH_PORT:-22} -j DNAT --to-destination ${CONTAINER_GATEWAY}:${SSH_PORT:-22}
-PostDown = nft delete table ip wireguard-dnat >/dev/null 2>&1 || true
 PostDown = iptables -t nat -D POSTROUTING -o %i -m mark --mark 0xca6c -j SNAT --to-source ${CLIENT_IP%%/*}
 PostDown = iptables -D FORWARD -j ACCEPT
 PostDown = ip route del 172.17.0.0/16 via ${CONTAINER_GATEWAY} dev eth0 table 51820
