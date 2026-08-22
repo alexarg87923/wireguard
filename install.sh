@@ -84,7 +84,12 @@ fi
 
 # Always use docker compose to ensure containers are managed by compose
 echo "Starting container..."
-if ! docker compose --profile ${PROFILE} up -d; then
+COMPOSE_UP_ARGS=(--profile "${PROFILE}" up -d)
+if [ "$PROFILE" = "client" ] && { [ "${ENABLE_MINIO:-true}" = "false" ] || [ "${ENABLE_MINIO:-true}" = "0" ]; }; then
+  echo "MinIO disabled (ENABLE_MINIO=false), starting wireguard-client without MinIO..."
+  COMPOSE_UP_ARGS=(--profile "${PROFILE}" up -d --no-deps wireguard-client)
+fi
+if ! docker compose "${COMPOSE_UP_ARGS[@]}"; then
   echo ""
   echo "Error: Failed to start containers. If you see iptables errors,"
   echo "please restart Docker daemon: sudo systemctl restart docker"

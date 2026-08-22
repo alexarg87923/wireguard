@@ -45,37 +45,42 @@ if [ "$MODE" = "client" ] || [ "$MODE" = "CLIENT" ]; then
 
   # Resolve MinIO container IP using Docker network DNS (containers share the same network)
   # iptables requires an IP address, so we resolve the container name "minio" to its IP
-  log "=== Starting MinIO IP Resolution ==="
-  if [ -z "$MINIO_CONTAINER_IP" ]; then
-    # Wait for MinIO container to be resolvable (with retries)
-    log "MINIO_CONTAINER_IP not set, attempting to resolve..."
-    log "Waiting for MinIO container to be available..."
-    max_attempts=30
-    attempt=0
+  if [ "${ENABLE_MINIO:-true}" = "false" ] || [ "${ENABLE_MINIO:-true}" = "0" ]; then
+    log "MinIO disabled (ENABLE_MINIO=false), skipping MinIO IP resolution"
     MINIO_CONTAINER_IP=""
-    
-    while [ $attempt -lt $max_attempts ]; do
-      MINIO_CONTAINER_IP=$(getent hosts minio 2>/dev/null | awk '{print $1}' | head -n1)
-      if [ -n "$MINIO_CONTAINER_IP" ]; then
-        log "Resolved MinIO container IP: $MINIO_CONTAINER_IP (from hostname 'minio')"
-        break
-      fi
-      attempt=$((attempt + 1))
-      if [ $attempt -lt $max_attempts ]; then
-        log "Attempt $attempt/$max_attempts: MinIO not yet resolvable, waiting 2 seconds..."
-        log "  Debug: getent hosts minio output: $(getent hosts minio 2>&1 || echo 'failed')"
-        sleep 2
-      fi
-    done
-    
-    if [ -z "$MINIO_CONTAINER_IP" ]; then
-      log "Warning: Could not resolve MinIO container IP from hostname 'minio' after $max_attempts attempts."
-      log "MinIO DNAT rules will be skipped. Ensure MinIO container is running and on the same network."
-      log "You can set MINIO_CONTAINER_IP manually in .env if needed."
-      MINIO_CONTAINER_IP=""
-    fi
   else
-    log "Using manually configured MinIO container IP: $MINIO_CONTAINER_IP"
+    log "=== Starting MinIO IP Resolution ==="
+    if [ -z "$MINIO_CONTAINER_IP" ]; then
+      # Wait for MinIO container to be resolvable (with retries)
+      log "MINIO_CONTAINER_IP not set, attempting to resolve..."
+      log "Waiting for MinIO container to be available..."
+      max_attempts=30
+      attempt=0
+      MINIO_CONTAINER_IP=""
+
+      while [ $attempt -lt $max_attempts ]; do
+        MINIO_CONTAINER_IP=$(getent hosts minio 2>/dev/null | awk '{print $1}' | head -n1)
+        if [ -n "$MINIO_CONTAINER_IP" ]; then
+          log "Resolved MinIO container IP: $MINIO_CONTAINER_IP (from hostname 'minio')"
+          break
+        fi
+        attempt=$((attempt + 1))
+        if [ $attempt -lt $max_attempts ]; then
+          log "Attempt $attempt/$max_attempts: MinIO not yet resolvable, waiting 2 seconds..."
+          log "  Debug: getent hosts minio output: $(getent hosts minio 2>&1 || echo 'failed')"
+          sleep 2
+        fi
+      done
+
+      if [ -z "$MINIO_CONTAINER_IP" ]; then
+        log "Warning: Could not resolve MinIO container IP from hostname 'minio' after $max_attempts attempts."
+        log "MinIO DNAT rules will be skipped. Ensure MinIO container is running and on the same network."
+        log "You can set MINIO_CONTAINER_IP manually in .env if needed."
+        MINIO_CONTAINER_IP=""
+      fi
+    else
+      log "Using manually configured MinIO container IP: $MINIO_CONTAINER_IP"
+    fi
   fi
 
   # HOST_PUBLIC_IP should be provided by start_container.sh

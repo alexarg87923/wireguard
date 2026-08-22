@@ -43,6 +43,7 @@ services:
       - SERVER_PUBLIC_KEY=${SERVER_PUBLIC_KEY}
       - ALLOWEDIPS=${ALLOWEDIPS}
       - HOST_PUBLIC_IP=${HOST_PUBLIC_IP:-localhost}
+      - ENABLE_MINIO=${ENABLE_MINIO:-true}
       - PUID=1000
       - PGID=1000
       - INTERNAL_SUBNET=10.0.2.1
