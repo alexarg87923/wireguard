@@ -57,11 +57,17 @@ fi
 
 # Auto-detect HOST_PUBLIC_IP if not set (for client profile)
 if [ "$PROFILE" = "client" ] && [ -z "$HOST_PUBLIC_IP" ]; then
-  echo "Detecting host public IP..."
-  HOST_PUBLIC_IP=$(curl -s --max-time 3 ifconfig.me 2>/dev/null || curl -s --max-time 3 ip.pi 2>/dev/null || curl -s --max-time 3 ipinfo.io/ip 2>/dev/null || echo "")
+  echo "Detecting host public IPv4..."
+  HOST_PUBLIC_IP=$(
+    curl -4 -s --max-time 3 ifconfig.me 2>/dev/null ||
+    curl -4 -s --max-time 3 ipv4.icanhazip.com 2>/dev/null ||
+    curl -4 -s --max-time 3 api.ipify.org 2>/dev/null ||
+    echo ""
+  )
+  HOST_PUBLIC_IP=$(printf '%s' "$HOST_PUBLIC_IP" | tr -d '\r\n[:space:]')
   if [ -z "$HOST_PUBLIC_IP" ] || [[ ! "$HOST_PUBLIC_IP" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-    echo "Warning: Could not auto-detect HOST_PUBLIC_IP. Please set it manually in .env"
-    echo "You can find it with: curl ifconfig.me"
+    echo "Warning: Could not auto-detect HOST_PUBLIC_IP (need IPv4). Please set it manually in .env"
+    echo "You can find it with: curl -4 ifconfig.me"
     exit 1
   fi
   export HOST_PUBLIC_IP
@@ -85,9 +91,11 @@ fi
 # Always use docker compose to ensure containers are managed by compose
 echo "Starting container..."
 COMPOSE_UP_ARGS=(--profile "${PROFILE}" up -d)
-if [ "$PROFILE" = "client" ] && { [ "${ENABLE_MINIO:-true}" = "false" ] || [ "${ENABLE_MINIO:-true}" = "0" ]; }; then
-  echo "MinIO disabled (ENABLE_MINIO=false), starting wireguard-client without MinIO..."
-  COMPOSE_UP_ARGS=(--profile "${PROFILE}" up -d --no-deps wireguard-client)
+if [ "$PROFILE" = "client" ] && [ "${ENABLE_MINIO:-true}" != "false" ] && [ "${ENABLE_MINIO:-true}" != "0" ]; then
+  echo "MinIO enabled, starting minio profile..."
+  COMPOSE_UP_ARGS=(--profile "${PROFILE}" --profile minio up -d)
+elif [ "$PROFILE" = "client" ]; then
+  echo "MinIO disabled (ENABLE_MINIO=false), starting wireguard-client only..."
 fi
 if ! docker compose "${COMPOSE_UP_ARGS[@]}"; then
   echo ""
@@ -193,9 +201,13 @@ fi
 # Stop containers using the same profile that was used to start them
 if [ -z "${PROFILE:-}" ]; then
   echo "Warning: PROFILE not set in .env, stopping all containers..."
-  docker compose down --remove-orphans
+  docker compose --profile minio down --remove-orphans
 else
-  docker compose --profile ${PROFILE} down --remove-orphans
+  if [ "$PROFILE" = "client" ]; then
+    docker compose --profile "${PROFILE}" --profile minio down --remove-orphans
+  else
+    docker compose --profile "${PROFILE}" down --remove-orphans
+  fi
   
   # Fallback: explicitly stop by container name if compose down didn't work
   CONTAINER_NAME="wireguard-${PROFILE}"

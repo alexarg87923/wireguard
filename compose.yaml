@@ -42,7 +42,7 @@ services:
       - CLIENT_PORT=${CLIENT_PORT}
       - SERVER_PUBLIC_KEY=${SERVER_PUBLIC_KEY}
       - ALLOWEDIPS=${ALLOWEDIPS}
-      - HOST_PUBLIC_IP=${HOST_PUBLIC_IP:-localhost}
+      - HOST_PUBLIC_IP=${HOST_PUBLIC_IP}
       - ENABLE_MINIO=${ENABLE_MINIO:-true}
       - PUID=1000
       - PGID=1000
@@ -59,10 +59,11 @@ services:
     depends_on:
       minio:
         condition: service_healthy
+        required: false
     entrypoint: ["/bin/bash"]
     command: ["/config/wireguard-entrypoint.sh"]
   minio:
-    profiles: ["client"]
+    profiles: ["minio"]
     image: minio/minio:latest
     container_name: minio
     ports:
