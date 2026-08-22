@@ -250,8 +250,12 @@ echo "Pruning containers and volumes..."
 ${DOCKER_CMD} container prune -f || true
 ${DOCKER_CMD} volume prune -f || true
 
-echo "Removing all images..."
-${DOCKER_CMD} images | awk '{print $2}' | grep -v "ID" | grep -v "\->" | xargs ${DOCKER_CMD} image rm || true
+echo "Removing WireGuard images so the next start rebuilds..."
+${DOCKER_CMD} rmi -f wireguard-wireguard-client wireguard-wireguard-server 2>/dev/null || true
+IMAGE_IDS=$(${DOCKER_CMD} images -q --filter "reference=wireguard-*")
+if [ -n "$IMAGE_IDS" ]; then
+  echo "$IMAGE_IDS" | sort -u | xargs -r ${DOCKER_CMD} rmi -f || true
+fi
 EOF
 
 # create gen_psk.sh

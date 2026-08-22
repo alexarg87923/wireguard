@@ -22,6 +22,7 @@ services:
       - ./.env
     volumes:
       - ./wireguard/keys:/config/server
+      - ./wireguard/wireguard-entrypoint.sh:/config/wireguard-entrypoint.sh
     entrypoint: ["/bin/bash"]
     command: ["/config/wireguard-entrypoint.sh"]
   wireguard-client:
@@ -54,6 +55,7 @@ services:
       - net.ipv4.conf.all.src_valid_mark=1
     volumes:
       - ./wireguard/keys:/config/server
+      - ./wireguard/wireguard-entrypoint.sh:/config/wireguard-entrypoint.sh
     networks:
       - wireguard-network
     depends_on:
