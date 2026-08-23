@@ -476,9 +476,10 @@ echo "Setting up iptables rules..."
 # Clean up any existing rules first (idempotent)
 ./remove_host_routing.sh 2>/dev/null || true
 
-# 1. Allow container traffic forwarding
+# 1. Allow container traffic forwarding, including other host Docker nets to VPN peers
 iptables -I FORWARD 1 -d "$CONTAINER_SUBNET" -j ACCEPT -m comment --comment "wireguard"
 iptables -I FORWARD 1 -s "$CONTAINER_SUBNET" -j ACCEPT -m comment --comment "wireguard"
+iptables -I FORWARD 1 -d 10.0.2.0/24 -j ACCEPT -m comment --comment "wireguard"
 
 # 2. NAT for container's internet access
 iptables -t nat -A POSTROUTING -s "$CONTAINER_SUBNET" -o "$MAIN_IF" -j MASQUERADE -m comment --comment "wireguard"
