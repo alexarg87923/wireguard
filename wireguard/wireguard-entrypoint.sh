@@ -193,11 +193,13 @@ PrivateKey = $(cat ${KEY_DIR}/privatekey-server)
 PostUp = iptables -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 PostUp = iptables -A FORWARD -i %i -o eth+ -j ACCEPT
 PostUp = iptables -A FORWARD -i eth+ -o %i -j ACCEPT
+PostUp = iptables -t nat -A POSTROUTING -o eth+ -s 10.0.2.0/24 -d 172.16.0.0/12 -j RETURN
 PostUp = iptables -t nat -A POSTROUTING -o eth+ -j MASQUERADE
 PostUp = iptables -t nat -A POSTROUTING -o %i ! -s 10.0.2.0/24 -j SNAT --to-source ${INTERNAL_SUBNET%%/*}
 ${VPN_PEER_FWD_UP}${VPN_PORT_DNAT_UP}${VPN_PORT_DNAT_DOWN}${VPN_PEER_FWD_DOWN}
 PostDown = iptables -t nat -D POSTROUTING -o %i ! -s 10.0.2.0/24 -j SNAT --to-source ${INTERNAL_SUBNET%%/*}
 PostDown = iptables -t nat -D POSTROUTING -o eth+ -j MASQUERADE
+PostDown = iptables -t nat -D POSTROUTING -o eth+ -s 10.0.2.0/24 -d 172.16.0.0/12 -j RETURN
 PostDown = iptables -D FORWARD -i eth+ -o %i -j ACCEPT
 PostDown = iptables -D FORWARD -i %i -o eth+ -j ACCEPT
 PostDown = iptables -D FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT

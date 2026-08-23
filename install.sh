@@ -137,6 +137,7 @@ fi
 if [ "$PROFILE" = "client" ] && [ "${ENABLE_EMERGENCY_ACCESS:-true}" != "false" ] && [ "${ENABLE_EMERGENCY_ACCESS:-true}" != "0" ]; then
   echo "Removing emergency access rule if it exists..."
   iptables -D INPUT -p tcp --dport 22 -s ${CLIENT_ENDPOINT} -j ACCEPT -m comment --comment "wireguard" 2>/dev/null || true
+  iptables -D INPUT -p tcp --dport 22 -s ${CLIENT_ENDPOINT} -j ACCEPT -m comment --comment "Emergency Access" 2>/dev/null || true
 fi
 
 if [ "$PROFILE" = "client" ] || [ "$PROFILE" = "server" ]; then
@@ -473,8 +474,11 @@ echo "Container subnet: $CONTAINER_SUBNET"
 echo ""
 echo "Setting up iptables rules..."
 
-# Clean up any existing rules first (idempotent)
-./remove_host_routing.sh 2>/dev/null || true
+# Keep 10.0.2.0/24 up the whole time so a VPN SSH session survives this script.
+ip route replace 10.0.2.0/24 via "$CONTAINER_IP"
+
+# Clean tagged rules only. Do not delete the VPN route.
+SKIP_ROUTE=1 ./remove_host_routing.sh 2>/dev/null || true
 
 # 1. Allow container traffic forwarding, including other host Docker nets to VPN peers
 iptables -I FORWARD 1 -d "$CONTAINER_SUBNET" -j ACCEPT -m comment --comment "wireguard"
@@ -486,8 +490,7 @@ iptables -t nat -A POSTROUTING -s "$CONTAINER_SUBNET" -o "$MAIN_IF" -j MASQUERAD
 
 # 3. Add route for VPN subnet to allow SSH replies back to VPN clients
 echo "Adding route for VPN subnet (10.0.2.0/24) via container..."
-ip route add 10.0.2.0/24 via "$CONTAINER_IP" 2>/dev/null || \
-  ip route replace 10.0.2.0/24 via "$CONTAINER_IP"
+ip route replace 10.0.2.0/24 via "$CONTAINER_IP"
 
 # 4. Add UFW rules for VPN access
 echo "Adding iptables rules..."
@@ -537,13 +540,15 @@ fi
 
 echo "Removing host routing rules tagged wireguard..."
 
-ip route del 10.0.2.0/24 2>/dev/null || true
+if [ "${SKIP_ROUTE:-}" != "1" ]; then
+  ip route del 10.0.2.0/24 2>/dev/null || true
+fi
 
 # Only delete rules we tagged. Never flush tables.
 delete_tagged() {
   table="$1"
   chain="$2"
-  iptables -t "$table" -S "$chain" 2>/dev/null | grep -- '--comment "wireguard"' | while read -r rule; do
+  iptables -t "$table" -S "$chain" 2>/dev/null | grep -E -- 'comment "?wireguard"?|comment "?Emergency Access"?|comment "?MinIO-' | while read -r rule; do
     [ -z "$rule" ] && continue
     eval "iptables -t $table $(echo "$rule" | sed 's/^-A/-D/')" 2>/dev/null || true
   done || true
