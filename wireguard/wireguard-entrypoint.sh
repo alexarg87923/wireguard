@@ -43,46 +43,6 @@ if [ "$MODE" = "client" ] || [ "$MODE" = "CLIENT" ]; then
     log "Auto-detected CONTAINER_GATEWAY: $CONTAINER_GATEWAY"
   fi
 
-  # Resolve MinIO container IP using Docker network DNS (containers share the same network)
-  # iptables requires an IP address, so we resolve the container name "minio" to its IP
-  if [ "${ENABLE_MINIO:-true}" = "false" ] || [ "${ENABLE_MINIO:-true}" = "0" ]; then
-    log "MinIO disabled (ENABLE_MINIO=false), skipping MinIO IP resolution"
-    MINIO_CONTAINER_IP=""
-  else
-    log "=== Starting MinIO IP Resolution ==="
-    if [ -z "$MINIO_CONTAINER_IP" ]; then
-      # Wait for MinIO container to be resolvable (with retries)
-      log "MINIO_CONTAINER_IP not set, attempting to resolve..."
-      log "Waiting for MinIO container to be available..."
-      max_attempts=30
-      attempt=0
-      MINIO_CONTAINER_IP=""
-
-      while [ $attempt -lt $max_attempts ]; do
-        MINIO_CONTAINER_IP=$(getent hosts minio 2>/dev/null | awk '{print $1}' | head -n1)
-        if [ -n "$MINIO_CONTAINER_IP" ]; then
-          log "Resolved MinIO container IP: $MINIO_CONTAINER_IP (from hostname 'minio')"
-          break
-        fi
-        attempt=$((attempt + 1))
-        if [ $attempt -lt $max_attempts ]; then
-          log "Attempt $attempt/$max_attempts: MinIO not yet resolvable, waiting 2 seconds..."
-          log "  Debug: getent hosts minio output: $(getent hosts minio 2>&1 || echo 'failed')"
-          sleep 2
-        fi
-      done
-
-      if [ -z "$MINIO_CONTAINER_IP" ]; then
-        log "Warning: Could not resolve MinIO container IP from hostname 'minio' after $max_attempts attempts."
-        log "MinIO DNAT rules will be skipped. Ensure MinIO container is running and on the same network."
-        log "You can set MINIO_CONTAINER_IP manually in .env if needed."
-        MINIO_CONTAINER_IP=""
-      fi
-    else
-      log "Using manually configured MinIO container IP: $MINIO_CONTAINER_IP"
-    fi
-  fi
-
   # HOST_PUBLIC_IP should be provided by start_container.sh
   if [ -z "$HOST_PUBLIC_IP" ]; then
     log "Error: HOST_PUBLIC_IP is not set. This should be detected automatically by start_container.sh"
@@ -105,6 +65,25 @@ if [ "$MODE" = "client" ] || [ "$MODE" = "CLIENT" ]; then
       wg genkey | tee "$KEY_DIR/privatekey-client" | wg pubkey > "$KEY_DIR/publickey-client"
   fi
 
+  LOCAL_VPN_IP="${CLIENT_IP%%/*}"
+  VPN_PORT_DNAT_UP=""
+  VPN_PORT_DNAT_DOWN=""
+  OLD_IFS="$IFS"
+  IFS=','
+  for entry in ${VPN_ALLOW}; do
+    entry=$(echo "$entry" | tr -d '[:space:]')
+    [ -z "$entry" ] && continue
+    dest="${entry%:*}"
+    port="${entry##*:}"
+    [ "$dest" != "$LOCAL_VPN_IP" ] && continue
+    [ -z "$port" ] || [ "$port" = "$entry" ] && continue
+    VPN_PORT_DNAT_UP="${VPN_PORT_DNAT_UP}PostUp = iptables -t nat -A PREROUTING -i %i -d ${LOCAL_VPN_IP} -p tcp --dport ${port} -j DNAT --to-destination ${CONTAINER_GATEWAY}:${port}
+"
+    VPN_PORT_DNAT_DOWN="${VPN_PORT_DNAT_DOWN}PostDown = iptables -t nat -D PREROUTING -i %i -d ${LOCAL_VPN_IP} -p tcp --dport ${port} -j DNAT --to-destination ${CONTAINER_GATEWAY}:${port}
+"
+  done
+  IFS="$OLD_IFS"
+
   mkdir -p "$CONFIG_DIR"
   cat > "$CONFIG_DIR/wg0.conf" <<EOF
 [Interface]
@@ -120,15 +99,7 @@ PostUp = ip route add ${CLIENT_ENDPOINT} via ${CONTAINER_GATEWAY} dev eth0 table
 PostUp = ip route add 172.17.0.0/16 via ${CONTAINER_GATEWAY} dev eth0 table 51820
 PostUp = iptables -A FORWARD -j ACCEPT
 PostUp = iptables -t nat -A POSTROUTING -o %i -m mark --mark 0xca6c -j SNAT --to-source ${CLIENT_IP%%/*}
-PostUp = iptables -t nat -A PREROUTING -i %i -d ${CLIENT_IP%%/*} -p tcp --dport ${SSH_PORT:-22} -j DNAT --to-destination ${CONTAINER_GATEWAY}:${SSH_PORT:-22}
-PostUp = iptables -t nat -A PREROUTING -i %i -d ${CLIENT_IP%%/*} -p tcp --dport ${BACKEND_PORT:-3060} -j DNAT --to-destination ${CONTAINER_GATEWAY}:${BACKEND_PORT:-3060}
-$( [ -n "${MINIO_CONTAINER_IP}" ] && echo "PostUp = iptables -t nat -A PREROUTING -i %i -d ${CLIENT_IP%%/*} -p tcp --dport ${MINIO_WEB_PORT:-8080} -j DNAT --to-destination ${MINIO_CONTAINER_IP}:${MINIO_WEB_PORT:-8080}" )
-$( [ -n "${MINIO_CONTAINER_IP}" ] && echo "PostUp = iptables -t nat -A PREROUTING -i %i -d ${CLIENT_IP%%/*} -p tcp --dport ${MINIO_CONSOLE_PORT:-4020} -j DNAT --to-destination ${MINIO_CONTAINER_IP}:${MINIO_CONSOLE_PORT:-4020}" )
-
-$( [ -n "${MINIO_CONTAINER_IP}" ] && echo "PostDown = iptables -t nat -D PREROUTING -i %i -d ${CLIENT_IP%%/*} -p tcp --dport ${MINIO_CONSOLE_PORT:-4020} -j DNAT --to-destination ${MINIO_CONTAINER_IP}:${MINIO_CONSOLE_PORT:-4020}" )
-$( [ -n "${MINIO_CONTAINER_IP}" ] && echo "PostDown = iptables -t nat -D PREROUTING -i %i -d ${CLIENT_IP%%/*} -p tcp --dport ${MINIO_WEB_PORT:-8080} -j DNAT --to-destination ${MINIO_CONTAINER_IP}:${MINIO_WEB_PORT:-8080}" )
-PostDown = iptables -t nat -D PREROUTING -i %i -d ${CLIENT_IP%%/*} -p tcp --dport ${BACKEND_PORT:-3060} -j DNAT --to-destination ${CONTAINER_GATEWAY}:${BACKEND_PORT:-3060}
-PostDown = iptables -t nat -D PREROUTING -i %i -d ${CLIENT_IP%%/*} -p tcp --dport ${SSH_PORT:-22} -j DNAT --to-destination ${CONTAINER_GATEWAY}:${SSH_PORT:-22}
+${VPN_PORT_DNAT_UP}${VPN_PORT_DNAT_DOWN}
 PostDown = iptables -t nat -D POSTROUTING -o %i -m mark --mark 0xca6c -j SNAT --to-source ${CLIENT_IP%%/*}
 PostDown = iptables -D FORWARD -j ACCEPT
 PostDown = ip route del 172.17.0.0/16 via ${CONTAINER_GATEWAY} dev eth0 table 51820
@@ -173,9 +144,12 @@ else
       wg genkey | tee "$KEY_DIR/privatekey-server" | wg pubkey > "$KEY_DIR/publickey-server"
   fi
 
-  VPN_SSH_DNAT_UP=""
-  VPN_SSH_DNAT_DOWN=""
-  if [ "${ENABLE_VPN_SSH:-true}" != "false" ] && [ "${ENABLE_VPN_SSH:-true}" != "0" ]; then
+  LOCAL_VPN_IP="${INTERNAL_SUBNET%%/*}"
+  VPN_PORT_DNAT_UP=""
+  VPN_PORT_DNAT_DOWN=""
+  VPN_PEER_FWD_UP=""
+  VPN_PEER_FWD_DOWN=""
+  if [ -n "${VPN_ALLOW}" ]; then
     if [ -z "$CONTAINER_GATEWAY" ]; then
       CONTAINER_GATEWAY=$(ip route show default 2>/dev/null | awk '/default/ {print $3}' | head -n1)
       if [ -z "$CONTAINER_GATEWAY" ]; then
@@ -187,10 +161,27 @@ else
       fi
       log "Auto-detected CONTAINER_GATEWAY: $CONTAINER_GATEWAY"
     fi
-    VPN_SSH_DNAT_UP="PostUp = iptables -t nat -A PREROUTING -i %i -d ${INTERNAL_SUBNET%%/*} -p tcp --dport ${SSH_PORT:-22} -j DNAT --to-destination ${CONTAINER_GATEWAY}:${SSH_PORT:-22}"
-    VPN_SSH_DNAT_DOWN="PostDown = iptables -t nat -D PREROUTING -i %i -d ${INTERNAL_SUBNET%%/*} -p tcp --dport ${SSH_PORT:-22} -j DNAT --to-destination ${CONTAINER_GATEWAY}:${SSH_PORT:-22}"
-  else
-    log "VPN host SSH disabled (ENABLE_VPN_SSH=false), skipping DNAT"
+    OLD_IFS="$IFS"
+    IFS=','
+    for entry in ${VPN_ALLOW}; do
+      entry=$(echo "$entry" | tr -d '[:space:]')
+      [ -z "$entry" ] && continue
+      dest="${entry%:*}"
+      port="${entry##*:}"
+      [ -z "$port" ] || [ "$port" = "$entry" ] && continue
+      if [ "$dest" = "$LOCAL_VPN_IP" ]; then
+        VPN_PORT_DNAT_UP="${VPN_PORT_DNAT_UP}PostUp = iptables -t nat -A PREROUTING -i %i -d ${LOCAL_VPN_IP} -p tcp --dport ${port} -j DNAT --to-destination ${CONTAINER_GATEWAY}:${port}
+"
+        VPN_PORT_DNAT_DOWN="${VPN_PORT_DNAT_DOWN}PostDown = iptables -t nat -D PREROUTING -i %i -d ${LOCAL_VPN_IP} -p tcp --dport ${port} -j DNAT --to-destination ${CONTAINER_GATEWAY}:${port}
+"
+      else
+        VPN_PEER_FWD_UP="${VPN_PEER_FWD_UP}PostUp = iptables -A FORWARD -i %i -d ${dest} -p tcp --dport ${port} -j ACCEPT
+"
+        VPN_PEER_FWD_DOWN="${VPN_PEER_FWD_DOWN}PostDown = iptables -D FORWARD -i %i -d ${dest} -p tcp --dport ${port} -j ACCEPT
+"
+      fi
+    done
+    IFS="$OLD_IFS"
   fi
 
   mkdir -p "$TEMPLATE_DIR"
@@ -199,12 +190,15 @@ else
 Address = ${INTERNAL_SUBNET}
 ListenPort = ${SERVER_PORT_VALUE}
 PrivateKey = $(cat ${KEY_DIR}/privatekey-server)
-PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -A FORWARD -o %i -j ACCEPT; iptables -t nat -A POSTROUTING -o eth+ -j MASQUERADE
+PostUp = iptables -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+PostUp = iptables -A FORWARD -i %i -o eth+ -j ACCEPT
+PostUp = iptables -t nat -A POSTROUTING -o eth+ -j MASQUERADE
 PostUp = iptables -t nat -A POSTROUTING -o %i ! -s 10.0.2.0/24 -j SNAT --to-source ${INTERNAL_SUBNET%%/*}
-${VPN_SSH_DNAT_UP}
-${VPN_SSH_DNAT_DOWN}
+${VPN_PEER_FWD_UP}${VPN_PORT_DNAT_UP}${VPN_PORT_DNAT_DOWN}${VPN_PEER_FWD_DOWN}
 PostDown = iptables -t nat -D POSTROUTING -o %i ! -s 10.0.2.0/24 -j SNAT --to-source ${INTERNAL_SUBNET%%/*}
-PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -D FORWARD -o %i -j ACCEPT; iptables -t nat -D POSTROUTING -o eth+ -j MASQUERADE
+PostDown = iptables -t nat -D POSTROUTING -o eth+ -j MASQUERADE
+PostDown = iptables -D FORWARD -i %i -o eth+ -j ACCEPT
+PostDown = iptables -D FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 EOF
 
   i=1

@@ -1,10 +1,16 @@
 #!/bin/bash
 
+if [ "$EUID" -ne 0 ]; then
+  echo "Error: run as root (sudo ./install.sh)" >&2
+  exit 1
+fi
+
 echo "Removing commands if they exist"
 
 rm ./start_container.sh
 rm ./stop_container.sh
 rm ./reset_container.sh
+rm ./reset.sh
 rm ./gen_psk.sh
 rm ./gen_keys.sh
 rm ./setup_host_routing.sh
@@ -25,11 +31,12 @@ mkdir -p bin
 cat > start_container.sh << 'EOF'
 #!/bin/bash
 
-# Check if user has docker permissions
-if ! docker ps > /dev/null 2>&1; then
-  echo "Error: Current user does not have permission to use Docker" >&2
-  echo "Please ensure you can run 'docker ps' successfully" >&2
-  echo "You may need to add your user to the docker group: sudo usermod -aG docker $USER" >&2
+if [ "$EUID" -ne 0 ]; then
+  echo "Error: run as root (sudo $0)" >&2
+  exit 1
+fi
+if ! command -v docker >/dev/null 2>&1; then
+  echo "Error: docker is not installed" >&2
   exit 1
 fi
 
@@ -129,23 +136,13 @@ fi
 # Host routing / emergency access (optional via .env flags)
 if [ "$PROFILE" = "client" ] && [ "${ENABLE_EMERGENCY_ACCESS:-true}" != "false" ] && [ "${ENABLE_EMERGENCY_ACCESS:-true}" != "0" ]; then
   echo "Removing emergency access rule if it exists..."
-  if [ "$EUID" -eq 0 ]; then
-    iptables -D INPUT -p tcp --dport 22 -s ${CLIENT_ENDPOINT} -j ACCEPT -m comment --comment "Emergency Access" 2>/dev/null || true
-  elif sudo -n true 2>/dev/null; then
-    sudo iptables -D INPUT -p tcp --dport 22 -s ${CLIENT_ENDPOINT} -j ACCEPT -m comment --comment "Emergency Access" 2>/dev/null || true
-  fi
+  iptables -D INPUT -p tcp --dport 22 -s ${CLIENT_ENDPOINT} -j ACCEPT -m comment --comment "wireguard" 2>/dev/null || true
 fi
 
-# Client always gets host routing (SSH to this box via its VPN IP).
-# Server host routing is only for SSH to 10.0.2.1 when ENABLE_VPN_SSH is on.
-if [ "$PROFILE" = "client" ] || { [ "$PROFILE" = "server" ] && [ "${ENABLE_VPN_SSH:-true}" != "false" ] && [ "${ENABLE_VPN_SSH:-true}" != "0" ]; }; then
+if [ "$PROFILE" = "client" ] || [ "$PROFILE" = "server" ]; then
   if [ -f "./setup_host_routing.sh" ]; then
     echo "Invoking setup_host_routing.sh..."
-    if [ "$EUID" -ne 0 ]; then
-      sudo ./setup_host_routing.sh
-    else
-      ./setup_host_routing.sh
-    fi
+    ./setup_host_routing.sh
   fi
 
   if [ "$PROFILE" = "client" ]; then
@@ -165,11 +162,12 @@ EOF
 cat > stop_container.sh << 'EOF'
 #!/bin/bash
 
-# Check if user has docker permissions
-if ! docker ps > /dev/null 2>&1; then
-  echo "Error: Current user does not have permission to use Docker" >&2
-  echo "Please ensure you can run 'docker ps' successfully" >&2
-  echo "You may need to add your user to the docker group: sudo usermod -aG docker $USER" >&2
+if [ "$EUID" -ne 0 ]; then
+  echo "Error: run as root (sudo $0)" >&2
+  exit 1
+fi
+if ! command -v docker >/dev/null 2>&1; then
+  echo "Error: docker is not installed" >&2
   exit 1
 fi
 
@@ -184,23 +182,13 @@ fi
 
 if [ "${PROFILE:-}" = "client" ] && [ "${ENABLE_EMERGENCY_ACCESS:-true}" != "false" ] && [ "${ENABLE_EMERGENCY_ACCESS:-true}" != "0" ]; then
   echo "Adding emergency access rule..."
-  if [ "$EUID" -eq 0 ]; then
-    iptables -A INPUT -p tcp --dport 22 -s ${CLIENT_ENDPOINT} -j ACCEPT -m comment --comment "Emergency Access" 2>/dev/null || true
-  elif sudo -n true 2>/dev/null; then
-    sudo iptables -A INPUT -p tcp --dport 22 -s ${CLIENT_ENDPOINT} -j ACCEPT -m comment --comment "Emergency Access" 2>/dev/null || true
-  else
-    echo "Warning: Cannot add emergency access rule (requires root/sudo)" >&2
-  fi
+  iptables -A INPUT -p tcp --dport 22 -s ${CLIENT_ENDPOINT} -j ACCEPT -m comment --comment "wireguard" 2>/dev/null || true
 fi
 
-if [ "${PROFILE:-}" = "client" ] || { [ "${PROFILE:-}" = "server" ] && [ "${ENABLE_VPN_SSH:-true}" != "false" ] && [ "${ENABLE_VPN_SSH:-true}" != "0" ]; }; then
+if [ "${PROFILE:-}" = "client" ] || [ "${PROFILE:-}" = "server" ]; then
   if [ -f "./remove_host_routing.sh" ]; then
     echo "Invoking remove_host_routing.sh..."
-    if [ "$EUID" -ne 0 ]; then
-      sudo ./remove_host_routing.sh
-    else
-      ./remove_host_routing.sh
-    fi
+    ./remove_host_routing.sh
   fi
 fi
 
@@ -225,43 +213,33 @@ else
 fi
 EOF
 
-# create reset_container.sh
-cat > reset_container.sh << 'EOF'
+# create reset.sh
+cat > reset.sh << 'EOF'
 #!/bin/bash
 
-# Check if user has docker permissions (either directly or via sudo)
-# First try without sudo, then with sudo
-DOCKER_CMD="docker"
-if ! docker ps > /dev/null 2>&1; then
-  # If direct docker doesn't work, check if sudo docker works
-  if sudo docker ps > /dev/null 2>&1; then
-    DOCKER_CMD="sudo docker"
-  else
-    echo "Error: Current user does not have permission to use Docker" >&2
-    echo "Please ensure you can run 'docker ps' or 'sudo docker ps' successfully" >&2
-    echo "You may need to add your user to the docker group: sudo usermod -aG docker $USER" >&2
-    exit 1
-  fi
+if [ "$EUID" -ne 0 ]; then
+  echo "Error: run as root (sudo $0)" >&2
+  exit 1
+fi
+if ! command -v docker >/dev/null 2>&1; then
+  echo "Error: docker is not installed" >&2
+  exit 1
 fi
 
-echo "Resetting container..."
+echo "Resetting this project's containers, images, and tagged iptables..."
 
-echo "Checking if stop_container.sh exists..."
 if [ -f "./stop_container.sh" ]; then
-  echo "Executing stop_container.sh..."
   ./stop_container.sh
+elif [ -f "./remove_host_routing.sh" ]; then
+  ./remove_host_routing.sh
 fi
 
-echo "Pruning containers and volumes..."
-${DOCKER_CMD} container prune -f || true
-${DOCKER_CMD} volume prune -f || true
+# Only this compose project. Does not prune other containers, volumes, or iptables.
+docker compose --profile server --profile client --profile minio down --rmi local --remove-orphans || true
+docker rm -f wireguard-server wireguard-client 2>/dev/null || true
+docker rmi -f wireguard-wireguard-client wireguard-wireguard-server 2>/dev/null || true
 
-echo "Removing WireGuard images so the next start rebuilds..."
-${DOCKER_CMD} rmi -f wireguard-wireguard-client wireguard-wireguard-server 2>/dev/null || true
-IMAGE_IDS=$(${DOCKER_CMD} images -q --filter "reference=wireguard-*")
-if [ -n "$IMAGE_IDS" ]; then
-  echo "$IMAGE_IDS" | sort -u | xargs -r ${DOCKER_CMD} rmi -f || true
-fi
+echo "Reset complete."
 EOF
 
 # create gen_psk.sh
@@ -271,6 +249,15 @@ cat > gen_psk.sh << 'EOF'
 # Usage: ./gen_psk.sh 1            # generates PSK for peer 1 and writes PEER1_PRESHARED_KEY in .env
 
 set -euo pipefail
+
+if [ "$EUID" -ne 0 ]; then
+  echo "Error: run as root (sudo $0)" >&2
+  exit 1
+fi
+if ! command -v docker >/dev/null 2>&1; then
+  echo "Error: docker is not installed" >&2
+  exit 1
+fi
 
 if [ $# -ne 1 ]; then
   echo "Usage: $0 <peer_index>" >&2
@@ -325,6 +312,15 @@ cat > gen_keys.sh << 'EOF'
 #   ./gen_keys.sh client   # sets CLIENT_PRIVATE_KEY and CLIENT_PUBLIC_KEY in .env
 
 set -euo pipefail
+
+if [ "$EUID" -ne 0 ]; then
+  echo "Error: run as root (sudo $0)" >&2
+  exit 1
+fi
+if ! command -v docker >/dev/null 2>&1; then
+  echo "Error: docker is not installed" >&2
+  exit 1
+fi
 
 if [ $# -ne 1 ]; then
   echo "Usage: $0 <server|client>" >&2
@@ -391,9 +387,12 @@ cat > setup_host_routing.sh << 'EOF'
 
 set -euo pipefail
 
-# Check if running as root
-if [ "$EUID" -ne 0 ]; then 
-  echo "Error: This script must be run as root (use sudo)"
+if [ "$EUID" -ne 0 ]; then
+  echo "Error: run as root (sudo $0)" >&2
+  exit 1
+fi
+if ! command -v docker >/dev/null 2>&1; then
+  echo "Error: docker is not installed" >&2
   exit 1
 fi
 
@@ -408,11 +407,6 @@ fi
 if [ "$PROFILE" != "client" ] && [ "$PROFILE" != "server" ]; then
   echo "Error: Host routing is only for client or server. Current PROFILE: ${PROFILE:-not set}"
   exit 1
-fi
-
-if [ "$PROFILE" = "server" ] && { [ "${ENABLE_VPN_SSH:-true}" = "false" ] || [ "${ENABLE_VPN_SSH:-true}" = "0" ]; }; then
-  echo "ENABLE_VPN_SSH=false, skipping host routing"
-  exit 0
 fi
 
 CONTAINER_NAME="wireguard-${PROFILE}"
@@ -483,11 +477,11 @@ echo "Setting up iptables rules..."
 ./remove_host_routing.sh 2>/dev/null || true
 
 # 1. Allow container traffic forwarding
-iptables -I FORWARD 1 -d "$CONTAINER_SUBNET" -j ACCEPT
-iptables -I FORWARD 1 -s "$CONTAINER_SUBNET" -j ACCEPT
+iptables -I FORWARD 1 -d "$CONTAINER_SUBNET" -j ACCEPT -m comment --comment "wireguard"
+iptables -I FORWARD 1 -s "$CONTAINER_SUBNET" -j ACCEPT -m comment --comment "wireguard"
 
 # 2. NAT for container's internet access
-iptables -t nat -A POSTROUTING -s "$CONTAINER_SUBNET" -o "$MAIN_IF" -j MASQUERADE
+iptables -t nat -A POSTROUTING -s "$CONTAINER_SUBNET" -o "$MAIN_IF" -j MASQUERADE -m comment --comment "wireguard"
 
 # 3. Add route for VPN subnet to allow SSH replies back to VPN clients
 echo "Adding route for VPN subnet (10.0.2.0/24) via container..."
@@ -497,14 +491,24 @@ ip route add 10.0.2.0/24 via "$CONTAINER_IP" 2>/dev/null || \
 # 4. Add UFW rules for VPN access
 echo "Adding iptables rules..."
 VPN_SUBNET="${CLIENT_SUBNET:-10.0.2.0/24}"
-iptables -A INPUT -s ${VPN_SUBNET} -p tcp --dport ${SSH_PORT:-22} -j ACCEPT -m comment --comment "SSH"
-if [ "$PROFILE" = "client" ]; then
-  if [ "${ENABLE_MINIO:-true}" != "false" ] && [ "${ENABLE_MINIO:-true}" != "0" ]; then
-    iptables -A INPUT -s ${VPN_SUBNET} -p tcp --dport ${MINIO_WEB_PORT:-8080} -j ACCEPT -m comment --comment "MinIO-Web"
-    iptables -A INPUT -s ${VPN_SUBNET} -p tcp --dport ${MINIO_CONSOLE_PORT:-4020} -j ACCEPT -m comment --comment "MinIO-Console"
-  fi
-  iptables -A INPUT -s ${VPN_SUBNET} -p tcp --dport ${BACKEND_PORT:-3060} -j ACCEPT -m comment --comment "Backend"
+if [ "$PROFILE" = "server" ]; then
+  LOCAL_VPN_IP="${INTERNAL_SUBNET%%/*}"
+  LOCAL_VPN_IP="${LOCAL_VPN_IP:-10.0.2.1}"
+else
+  LOCAL_VPN_IP="${CLIENT_IP%%/*}"
 fi
+OLD_IFS="$IFS"
+IFS=','
+for entry in ${VPN_ALLOW}; do
+  entry=$(echo "$entry" | tr -d '[:space:]')
+  [ -z "$entry" ] && continue
+  dest="${entry%:*}"
+  port="${entry##*:}"
+  [ "$dest" != "$LOCAL_VPN_IP" ] && continue
+  [ -z "$port" ] || [ "$port" = "$entry" ] && continue
+  iptables -A INPUT -s ${VPN_SUBNET} -p tcp --dport ${port} -j ACCEPT -m comment --comment "wireguard"
+done
+IFS="$OLD_IFS"
 
 echo "Host routing rules configured successfully!"
 echo ""
@@ -523,106 +527,30 @@ EOF
 cat > remove_host_routing.sh << 'EOF'
 #!/bin/bash
 
-# Script to remove iptables rules set up by setup_host_routing.sh
-
 set -e
 
-# Check if running as root
-if [ "$EUID" -ne 0 ]; then 
-  echo "Error: This script must be run as root (use sudo)"
+if [ "$EUID" -ne 0 ]; then
+  echo "Error: run as root (sudo $0)" >&2
   exit 1
 fi
 
-echo "Removing host routing rules..."
+echo "Removing host routing rules tagged wireguard..."
 
-# Load .env to get container subnet if available
-ENV_FILE=./.env
-CONTAINER_SUBNET=""
-MAIN_IF=""
-
-if [ -f "$ENV_FILE" ]; then
-  set -o allexport
-  source "$ENV_FILE"
-  set +o allexport
-  
-  # Try to detect if container is running to get subnet
-  if docker ps --format '{{.Names}}' | grep -q "^wireguard-client$"; then
-    NETWORK_NAME=$(docker inspect -f '{{range $key, $value := .NetworkSettings.Networks}}{{$key}}{{end}}' "wireguard-client" 2>/dev/null | head -n1)
-    if [ -n "$NETWORK_NAME" ]; then
-      CONTAINER_SUBNET=$(docker network inspect "${NETWORK_NAME}" 2>/dev/null | grep -i '"Subnet"' | head -n1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+' | head -n1)
-    fi
-  fi
-  
-  MAIN_IF=$(ip route show default | awk '/default/ {print $5}' | head -n1)
-fi
-
-# Remove VPN subnet route
 ip route del 10.0.2.0/24 2>/dev/null || true
 
-# Remove FORWARD rules
-if [ -n "$CONTAINER_SUBNET" ]; then
-  iptables -D FORWARD -d "$CONTAINER_SUBNET" -j ACCEPT 2>/dev/null || true
-  iptables -D FORWARD -s "$CONTAINER_SUBNET" -j ACCEPT 2>/dev/null || true
-else
-  # Try common Docker subnets
-  for subnet in "172.18.0.0/16" "172.17.0.0/16" "192.168.0.0/16"; do
-    iptables -D FORWARD -d "$subnet" -j ACCEPT 2>/dev/null || true
-    iptables -D FORWARD -s "$subnet" -j ACCEPT 2>/dev/null || true
-  done
-fi
-
-# Remove NAT rule
-if [ -n "$CONTAINER_SUBNET" ] && [ -n "$MAIN_IF" ]; then
-  iptables -t nat -D POSTROUTING -s "$CONTAINER_SUBNET" -o "$MAIN_IF" -j MASQUERADE 2>/dev/null || true
-else
-  # Try to remove NAT rules matching common patterns
-  if [ -n "$MAIN_IF" ]; then
-    iptables -t nat -S POSTROUTING | grep "MASQUERADE.*$MAIN_IF" | sed 's/-A/-D/' | while read line; do
-      if echo "$line" | grep -q "172\."; then
-        eval "iptables $line" 2>/dev/null || true
-      fi
-    done
-  fi
-fi
-
-# Remove VPN iptables rules
-echo "Removing VPN iptables rules..."
-
-# Remove iptables rules by comment (SSH, MinIO, Backend)
-# Remove rules by trying to delete them directly if CLIENT_SUBNET is available
-if [ -n "${CLIENT_SUBNET:-}" ]; then
-  # Remove SSH rule (use port from env or default)
-  iptables -D INPUT -s "${CLIENT_SUBNET}" -p tcp --dport ${SSH_PORT:-22} -j ACCEPT -m comment --comment "SSH" 2>/dev/null || true
-
-  if [ "${ENABLE_MINIO:-true}" != "false" ] && [ "${ENABLE_MINIO:-true}" != "0" ]; then
-    # Remove MinIO Web rule (use port from env or default)
-    iptables -D INPUT -s "${CLIENT_SUBNET}" -p tcp --dport ${MINIO_WEB_PORT:-8080} -j ACCEPT -m comment --comment "MinIO-Web" 2>/dev/null || true
-
-    # Remove MinIO Console rule (use port from env or default)
-    iptables -D INPUT -s "${CLIENT_SUBNET}" -p tcp --dport ${MINIO_CONSOLE_PORT:-4020} -j ACCEPT -m comment --comment "MinIO-Console" 2>/dev/null || true
-  fi
-
-  # Remove Backend rule (use port from env or default)
-  iptables -D INPUT -s "${CLIENT_SUBNET}" -p tcp --dport ${BACKEND_PORT:-3060} -j ACCEPT -m comment --comment "Backend" 2>/dev/null || true
-fi
-
-# Fallback: Remove rules by finding them via comment using iptables -S
-# This handles cases where CLIENT_SUBNET is not available or rules don't match exactly
-MINIO_COMMENTS=""
-if [ "${ENABLE_MINIO:-true}" != "false" ] && [ "${ENABLE_MINIO:-true}" != "0" ]; then
-  MINIO_COMMENTS="MinIO-Web MinIO-Console"
-fi
-for comment in "SSH" ${MINIO_COMMENTS} "Backend"; do
-  # Use iptables -S to find rules with matching comments and delete them
-  # iptables -S outputs rules in a format that can be converted to delete commands
-  iptables -S INPUT 2>/dev/null | grep -- "--comment \"${comment}\"" | while read rule; do
-    if [ -n "$rule" ]; then
-      # Convert -A to -D and execute
-      delete_rule=$(echo "$rule" | sed 's/^-A/-D/')
-      eval "iptables $delete_rule" 2>/dev/null || true
-    fi
+# Only delete rules we tagged. Never flush tables.
+delete_tagged() {
+  table="$1"
+  chain="$2"
+  iptables -t "$table" -S "$chain" 2>/dev/null | grep -- '--comment "wireguard"' | while read -r rule; do
+    [ -z "$rule" ] && continue
+    eval "iptables -t $table $(echo "$rule" | sed 's/^-A/-D/')" 2>/dev/null || true
   done || true
-done
+}
+
+delete_tagged filter INPUT
+delete_tagged filter FORWARD
+delete_tagged nat POSTROUTING
 
 echo "Host routing rules removed!"
 EOF
@@ -635,6 +563,15 @@ cat > setup_minio.sh << 'EOF'
 # This script should be run after the MinIO container is up and running
 
 set -euo pipefail
+
+if [ "$EUID" -ne 0 ]; then
+  echo "Error: run as root (sudo $0)" >&2
+  exit 1
+fi
+if ! command -v docker >/dev/null 2>&1; then
+  echo "Error: docker is not installed" >&2
+  exit 1
+fi
 
 # Load .env to get MinIO credentials and bucket names
 ENV_FILE=./.env
@@ -760,6 +697,15 @@ cat > bin/minio-upload.sh << 'EOF'
 
 set -euo pipefail
 
+if [ "$EUID" -ne 0 ]; then
+  echo "Error: run as root (sudo $0)" >&2
+  exit 1
+fi
+if ! command -v docker >/dev/null 2>&1; then
+  echo "Error: docker is not installed" >&2
+  exit 1
+fi
+
 if [ $# -lt 2 ] || [ $# -gt 3 ]; then
   echo "Usage: $0 <bucket> <local-file> [remote-path]" >&2
   echo "  bucket:      MinIO bucket name" >&2
@@ -866,6 +812,15 @@ cat > bin/minio-download.sh << 'EOF'
 
 set -euo pipefail
 
+if [ "$EUID" -ne 0 ]; then
+  echo "Error: run as root (sudo $0)" >&2
+  exit 1
+fi
+if ! command -v docker >/dev/null 2>&1; then
+  echo "Error: docker is not installed" >&2
+  exit 1
+fi
+
 if [ $# -lt 2 ] || [ $# -gt 3 ]; then
   echo "Usage: $0 <bucket> <remote-path> [local-file]" >&2
   echo "  bucket:      MinIO bucket name" >&2
@@ -968,17 +923,12 @@ cat > install_service.sh << 'EOF'
 
 set -euo pipefail
 
-# Check if running as root
-if [ "$EUID" -ne 0 ]; then 
-  echo "Error: This script must be run as root (use sudo)" >&2
+if [ "$EUID" -ne 0 ]; then
+  echo "Error: run as root (sudo $0)" >&2
   exit 1
 fi
-
-# Check if user has docker permissions
-if ! docker ps > /dev/null 2>&1; then
-  echo "Error: Current user does not have permission to use Docker" >&2
-  echo "Please ensure you can run 'docker ps' successfully" >&2
-  echo "You may need to add your user to the docker group: sudo usermod -aG docker $USER" >&2
+if ! command -v docker >/dev/null 2>&1; then
+  echo "Error: docker is not installed" >&2
   exit 1
 fi
 
@@ -996,8 +946,8 @@ if [ ! -f "${SCRIPT_DIR}/stop_container.sh" ]; then
   exit 1
 fi
 
-if [ ! -f "${SCRIPT_DIR}/reset_container.sh" ]; then
-  echo "Error: reset_container.sh not found in ${SCRIPT_DIR}" >&2
+if [ ! -f "${SCRIPT_DIR}/reset.sh" ]; then
+  echo "Error: reset.sh not found in ${SCRIPT_DIR}" >&2
   exit 1
 fi
 
@@ -1066,30 +1016,30 @@ echo "To check service status:"
 echo "  sudo systemctl status wireguard-vpn"
 echo ""
 echo "To reset containers (stop, prune, remove images):"
-echo "  ${SCRIPT_DIR}/reset_container.sh"
+echo "  ${SCRIPT_DIR}/reset.sh"
 echo ""
 echo "Note: The reset command is not integrated into systemd as it's destructive."
 echo "      Run it manually when needed."
 EOF
 
 # only need to add execute permission
-chmod +x start_container.sh stop_container.sh reset_container.sh gen_psk.sh gen_keys.sh setup_host_routing.sh remove_host_routing.sh setup_minio.sh install_service.sh
+chmod +x start_container.sh stop_container.sh reset.sh gen_psk.sh gen_keys.sh setup_host_routing.sh remove_host_routing.sh setup_minio.sh install_service.sh
 chmod +x bin/minio-upload.sh bin/minio-download.sh
 
-# Add bin directory to PATH
+# Add bin directory to PATH (real user when this was run via sudo)
 BIN_DIR="$(pwd)/bin"
+USER_HOME="${SUDO_USER:+$(getent passwd "$SUDO_USER" | cut -d: -f6)}"
+USER_HOME="${USER_HOME:-$HOME}"
 SHELL_RC=""
 
-# Detect shell and appropriate rc file
 if [ -n "${ZSH_VERSION:-}" ]; then
-  SHELL_RC="$HOME/.zshrc"
+  SHELL_RC="$USER_HOME/.zshrc"
 elif [ -n "${BASH_VERSION:-}" ]; then
-  SHELL_RC="$HOME/.bashrc"
+  SHELL_RC="$USER_HOME/.bashrc"
 else
-  # Try to detect from $SHELL
-  case "$SHELL" in
-    *zsh) SHELL_RC="$HOME/.zshrc" ;;
-    *) SHELL_RC="$HOME/.bashrc" ;;
+  case "${SHELL:-}" in
+    *zsh) SHELL_RC="$USER_HOME/.zshrc" ;;
+    *) SHELL_RC="$USER_HOME/.bashrc" ;;
   esac
 fi
 
@@ -1111,20 +1061,16 @@ else
 fi
 
 echo "Installation complete!"
-echo "Available commands:"
-echo "  ./start_container.sh           - Start the container"
-echo "  ./stop_container.sh            - Stop the container"
-echo "  ./reset_container.sh           - Complete reset"
-echo "  ./gen_psk.sh <n>               - Generate PSK for peer n and update .env"
-echo "  ./gen_keys.sh <role>           - Generate keypair for 'server' or 'client' and update .env"
-echo "  sudo ./setup_host_routing.sh   - Set up host routing rules (client only, requires root)"
-echo "  sudo ./remove_host_routing.sh  - Remove host routing rules (requires root)"
-echo "  ./setup_minio.sh               - Set up MinIO buckets (client only, auto-run by start_container.sh)"
-echo "  sudo ./install_service.sh      - Install WireGuard as a systemd service"
-echo ""
-echo "Global MinIO commands (after sourcing shell rc):"
-echo "  minio-upload.sh <bucket> <local-file> [remote-path]   - Upload file to MinIO bucket"
-echo "  minio-download.sh <bucket> <remote-path> [local-file] - Download file from MinIO bucket"
+echo "Available commands (all require sudo):"
+echo "  sudo ./start_container.sh"
+echo "  sudo ./stop_container.sh"
+echo "  sudo ./reset.sh"
+echo "  sudo ./gen_psk.sh <n>"
+echo "  sudo ./gen_keys.sh <server|client>"
+echo "  sudo ./setup_host_routing.sh"
+echo "  sudo ./remove_host_routing.sh"
+echo "  sudo ./setup_minio.sh"
+echo "  sudo ./install_service.sh"
 
 # self distruct to remove attack vectors
 rm -- "$0"

@@ -16,7 +16,6 @@ services:
       - PUID=1000
       - PGID=1000
       - INTERNAL_SUBNET=10.0.2.1
-      - ENABLE_VPN_SSH=${ENABLE_VPN_SSH:-true}
       - LOG_CONFS=true
     env_file:
       - ./.env
