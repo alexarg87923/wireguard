@@ -98,9 +98,9 @@ PostUp = ip route add ${HOST_PUBLIC_IP} via ${CONTAINER_GATEWAY} dev eth0 table 
 PostUp = ip route add ${CLIENT_ENDPOINT} via ${CONTAINER_GATEWAY} dev eth0 table 51820
 PostUp = ip route add 172.17.0.0/16 via ${CONTAINER_GATEWAY} dev eth0 table 51820
 PostUp = iptables -A FORWARD -j ACCEPT
-PostUp = iptables -t nat -A POSTROUTING -o %i -m mark --mark 0xca6c -j SNAT --to-source ${CLIENT_IP%%/*}
+PostUp = iptables -t nat -A POSTROUTING -o %i -j SNAT --to-source ${CLIENT_IP%%/*}
 ${VPN_PORT_DNAT_UP}${VPN_PORT_DNAT_DOWN}
-PostDown = iptables -t nat -D POSTROUTING -o %i -m mark --mark 0xca6c -j SNAT --to-source ${CLIENT_IP%%/*}
+PostDown = iptables -t nat -D POSTROUTING -o %i -j SNAT --to-source ${CLIENT_IP%%/*}
 PostDown = iptables -D FORWARD -j ACCEPT
 PostDown = ip route del 172.17.0.0/16 via ${CONTAINER_GATEWAY} dev eth0 table 51820
 PostDown = ip route del ${CLIENT_ENDPOINT} via ${CONTAINER_GATEWAY} dev eth0 table 51820
